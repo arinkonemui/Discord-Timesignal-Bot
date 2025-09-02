@@ -1,5 +1,5 @@
 // commands.js
-const { SlashCommandBuilder, SlashCommandIntegerOption, SlashCommandStringOption, SlashCommandBooleanOption, SlashCommandSubcommandBuilder, SlashCommandNumberOption } = require('discord.js');
+const { SlashCommandBuilder } = require('discord.js');
 
 module.exports = [
   new SlashCommandBuilder().setName('join').setDescription('今いるボイスチャンネルに参加します'),
@@ -22,14 +22,23 @@ module.exports = [
         .setRequired(true)
         .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' })
     ),
+
+  // HH:mm形式
   new SlashCommandBuilder()
     .setName('add-time')
-    .setDescription('時報の時刻を追加します（cron式: "sec min hour day month dow"）')
+    .setDescription('時報の時刻を追加します（推奨: HH:mm / 互換: cron）')
+    .addStringOption(opt =>
+      opt.setName('time')
+        .setDescription('HH:mm（24時間表記）例: 09:00')
+        .setRequired(false)
+    )
+  // clon形式
     .addStringOption(opt =>
       opt.setName('cron')
-        .setDescription('例: 0 0 9 * * *（毎朝9時）')
-        .setRequired(true)
+        .setDescription('互換: 0 0 9 * * *（毎朝9時）')
+        .setRequired(false)
     )
+  // タイムゾーン
     .addStringOption(opt =>
       opt.setName('tz')
         .setDescription('タイムゾーン（例: Asia/Tokyo）。未指定なら環境変数TZを使用')
@@ -40,8 +49,8 @@ module.exports = [
     .setDescription('登録済みの時刻を削除します（/list の番号）')
     .addIntegerOption(opt =>
       opt.setName('index')
-        .setDescription('削除する番号（1始まり）')
-        .setRequired(true)
+      .setDescription('削除する番号（1始まり）')
+      .setRequired(true)
     ),
   new SlashCommandBuilder()
     .setName('list')

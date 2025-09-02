@@ -19,8 +19,8 @@ Token.txt
 .env
 
 # audio フォルダ内の特定拡張子を無視（再帰）
-audio/**/*.wav
-audio/**/*.mp3
-audio/**/*.txt
-audio/**
-!audio/.gitkeep
+discord-time-signal/audio/**/*.wav
+discord-time-signal/audio/**/*.mp3
+discord-time-signal/audio/**/*.txt
+discord-time-signal/audio/**
+!discord-time-signal/audio/.gitkeep

@@ -7,6 +7,25 @@ const path = require('path');
 const { generateDependencyReport } = require('@discordjs/voice');
 console.log(generateDependencyReport());
 
+// 指定時間変換
+// HH:mm → cron（"0 m H * * *"）へ変換
+function hhmmToCron(hhmm) {
+  const m = hhmm.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!m) return null;
+  const H = parseInt(m[1], 10);
+  const M = parseInt(m[2], 10);
+  return `0 ${M} ${H} * * *`;
+}
+
+// "0 m H * * *" → HH:mm へ逆変換（単純な毎日パターンのみ）
+function cronToHHmm(cronExp) {
+  const m = cronExp.match(/^0\s+(\d{1,2})\s+(\d{1,2})\s+\*\s+\*\s+\*$/);
+  if (!m) return null;
+  const M = m[1].padStart(2, '0');
+  const H = m[2].padStart(2, '0');
+  return `${H}:${M}`;
+}
+
 // ---- 基本設定 ----
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -68,7 +87,13 @@ function replySettingsEmbed(cfg) {
       { name: '通知チャンネル', value: cfg.textChannelId ? `<#${cfg.textChannelId}>` : '未設定', inline: true },
       { name: '音声ファイル', value: cfg.audioFile || '未設定', inline: true },
       { name: 'ボイスチャンネル', value: cfg.voiceChannelId ? `<#${cfg.voiceChannelId}>` : '未設定', inline: true },
-      { name: '登録時刻', value: cfg.times.length ? cfg.times.map((t, i) => `${i + 1}. \`${t.cron}\` (${t.tz || DEFAULT_TZ})`).join('\n') : 'なし' }
+      { name: '登録時刻', value: cfg.times.length ? cfg.times.map((t, i) => {
+          const hhmm = cronToHHmm(t.cron);
+          const label = hhmm ? hhmm : `\`${t.cron}\``; // 変換できない複雑cronはそのまま表示
+          return `${i + 1}. ${label} (${t.tz || DEFAULT_TZ})`;
+        }).join('\n')
+        : 'なし'
+      }
     )
     .setTimestamp(new Date());
   return embed;
@@ -212,17 +237,45 @@ client.on('interactionCreate', async (interaction) => {
         break;
       }
       case 'add-time': {
-        const cronExp = interaction.options.getString('cron', true);
+        const timeStr = interaction.options.getString('time');
+        const cronExpInput = interaction.options.getString('cron');
         const tz = interaction.options.getString('tz') || null;
 
-        // 簡易バリデーション
-        if (!cron.validate(cronExp)) {
-          return interaction.reply({ content: 'cron式が不正です。例: `0 0 9 * * *`（毎朝9時）', ephemeral: true });
+        if (!timeStr && !cronExpInput) {
+          return interaction.reply({
+            content: 'HH:mm または cron を1つ指定してください。例: /add-time time:"09:00"',
+            ephemeral: true
+          });
         }
+        if (timeStr && cronExpInput) {
+          return interaction.reply({
+            content: 'HH:mm と cron は同時指定できません。どちらか一方にしてください。',
+            ephemeral: true
+          });
+        }
+
+        let cronExp = cronExpInput;
+        if (timeStr) {
+          const c = hhmmToCron(timeStr);
+          if (!c) {
+            return interaction.reply({ content: 'HH:mm の形式が不正です（例: 09:00）', ephemeral: true });
+          }
+          cronExp = c;
+        }
+        if (!cron.validate(cronExp)) {
+          return interaction.reply({ content: 'cron式が不正です。例: 0 0 9 * * *', ephemeral: true });
+        }
+
+        const cfg = ensureGuildConfig(guildId);
         cfg.times.push({ cron: cronExp, tz });
         saveStore(store);
         rebuildJobsForGuild(guildId);
-        await interaction.reply({ content: `追加しました：\`${cronExp}\` (${tz || DEFAULT_TZ})`, embeds: [replySettingsEmbed(cfg)] });
+
+        const shown = timeStr ?? (cronToHHmm(cronExp) || cronExp);
+        await interaction.reply({
+          content: `追加しました：**${shown}**（${tz || DEFAULT_TZ}）`,
+          embeds: [replySettingsEmbed(cfg)]
+        });
         break;
       }
       case 'remove-time': {
