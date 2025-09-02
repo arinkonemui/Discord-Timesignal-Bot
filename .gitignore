@@ -1,0 +1,19 @@
+# 共通
+.env
+.DS_Store
+Thumbs.db
+
+# Node/JS
+node_modules/
+dist/
+.vite/
+
+# C# / .NET
+bin/
+obj/
+.vs/
+
+# Logs
+*.log
+Token.txt
+.env

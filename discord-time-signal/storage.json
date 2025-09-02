@@ -1,0 +1,16 @@
+{
+  "guilds": {
+    "837868791429070899": {
+      "textChannelId": "1412005855112724590",
+      "voiceChannelId": "1412005603080933376",
+      "audioFile": "Test_Time_Anaunce1.wav",
+      "textEnabled": true,
+      "times": [
+        {
+          "cron": "0 15 17 * * *",
+          "tz": null
+        }
+      ]
+    }
+  }
+}
