@@ -21,5 +21,6 @@ Token.txt
 # audio フォルダ内の特定拡張子を無視（再帰）
 audio/**/*.wav
 audio/**/*.mp3
+audio/**/*.txt
 audio/**
 !audio/.gitkeep
