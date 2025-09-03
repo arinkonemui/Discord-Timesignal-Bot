@@ -4,15 +4,18 @@ const { SlashCommandBuilder } = require('discord.js');
 module.exports = [
   new SlashCommandBuilder().setName('join').setDescription('今いるボイスチャンネルに参加します'),
   new SlashCommandBuilder().setName('leave').setDescription('ボイスチャンネルから退出します'),
+
   new SlashCommandBuilder()
     .setName('set-audio')
     .setDescription('再生する音声ファイル（audio/配下）を設定します')
     .addStringOption(opt =>
       opt.setName('file').setDescription('例: chime.mp3').setRequired(true)
     ),
+
   new SlashCommandBuilder()
     .setName('set-text-channel')
     .setDescription('このチャンネルを通知先に設定します'),
+
   new SlashCommandBuilder()
     .setName('text-toggle')
     .setDescription('テキスト通知をON/OFFします')
@@ -29,33 +32,41 @@ module.exports = [
     .setDescription('時報の時刻を追加します（推奨: HH:mm / 互換: cron）')
     .addStringOption(opt =>
       opt.setName('time')
-        .setDescription('HH:mm（24時間表記）例: 09:00')
-        .setRequired(false)
+      .setDescription('HH:mm（24時間表記）例: 09:00')
+      .setRequired(false)
     )
-  // clon形式
+    // clon形式
     .addStringOption(opt =>
       opt.setName('cron')
-        .setDescription('互換: 0 0 9 * * *（毎朝9時）')
-        .setRequired(false)
+      .setDescription('互換: 0 0 9 * * *（毎朝9時）')
+      .setRequired(false)
     )
-  // タイムゾーン
+    // タイムゾーン
     .addStringOption(opt =>
       opt.setName('tz')
-        .setDescription('タイムゾーン（例: Asia/Tokyo）。未指定なら環境変数TZを使用')
-        .setRequired(false)
+      .setDescription('タイムゾーン（例: Asia/Tokyo）')
+      .setRequired(false)
     ),
+
   new SlashCommandBuilder()
     .setName('remove-time')
     .setDescription('登録済みの時刻を削除します（/list の番号）')
     .addIntegerOption(opt =>
-      opt.setName('index')
-      .setDescription('削除する番号（1始まり）')
-      .setRequired(true)
+      opt.setName('index').setDescription('削除する番号（1始まり）').setRequired(true)
     ),
+
   new SlashCommandBuilder()
     .setName('list')
     .setDescription('現在の設定を表示します'),
   new SlashCommandBuilder()
     .setName('test')
     .setDescription('すぐに一度だけ再生します（テキストON時は投稿も）'),
+
+  // settings.ini の出力／再読込
+  new SlashCommandBuilder()
+    .setName('config-export')
+    .setDescription('現在の設定を settings.ini に書き出します'),
+  new SlashCommandBuilder()
+    .setName('config-reload')
+    .setDescription('settings.ini を読み込んで設定を反映します'),
 ].map(c => c.toJSON());
