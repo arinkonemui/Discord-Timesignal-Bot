@@ -69,4 +69,14 @@ module.exports = [
   new SlashCommandBuilder()
     .setName('config-reload')
     .setDescription('settings.ini を読み込んで設定を反映します'),
+  
+  // helpコマンド
+  new SlashCommandBuilder()
+    .setName('help')
+    .setDescription('コマンド一覧と使い方を表示します')
+    .addStringOption(opt =>
+      opt.setName('command')
+        .setDescription('詳しく見たいコマンド名（例: add-time, set-audio）')
+        .setRequired(false)
+    ),
 ].map(c => c.toJSON());

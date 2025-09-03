@@ -482,6 +482,112 @@ client.on('interactionCreate', async (interaction) => {
         }
         break;
       }
+      /*******************/
+      // helpコマンド定義
+      /*******************/
+      case 'help': {
+        const lines = [
+          '【基本】',
+          '`/join` — 今いるボイスチャンネルに参加',
+          '`/leave` — ボイスチャンネルから退出',
+          '`/set-audio file:<name>` — 再生する音声ファイルを設定（audio/配下）',
+          '`/text-toggle mode:<on|off>` — テキスト通知のON/OFF',
+          '`/help` — このヘルプを表示',
+          '',
+          '【スケジュール】',
+          '`/add-time time:<HH:mm>  または  cron:"..." [tz:<TZ>]` — 時刻を追加（HH:mm推奨）',
+          '`/remove-time index:<N>` — 登録済みの時刻を削除（/listの番号）',
+          '`/list` — 現在の設定を表示',
+          '',
+          '【以下は通常は使用しないでOK】',
+          '`/set-text-channel` — このチャンネルを通知先に設定（/joinでも自動設定）',
+          '`/config-export` — settings.iniに書き出し（予備）',
+          '`/config-reload` — settings.iniを読み直し（予備）',
+        ];
+
+        const name = (interaction.options.getString('command') || '').toLowerCase();
+
+        // 詳細ヘルプ定義（必要に応じて追記できます）
+        const details = {
+          'join': {
+            title: '/join',
+            body: [
+              'あなたが入っている**ボイスチャンネル**にBotが参加します。',
+              '同時に「**このテキストチャンネル**」を通知先に設定します。',
+              '例: `/join`',
+            ],
+          },
+          'leave': {
+            title: '/leave',
+            body: ['ボイスチャンネルから退出します。'],
+          },
+          'set-audio': {
+            title: '/set-audio',
+            body: [
+              '再生する音源ファイルを `audio/` から選びます（拡張子まで一致）。',
+              '例: `/set-audio file: chime.mp3`',
+            ],
+          },
+          'set-text-channel': {
+            title: '/set-text-channel',
+            body: [
+              '「いまのテキストチャンネル」を通知先として保存します。',
+              '※ /join 実行時も自動でこのチャンネルに設定されます。',
+            ],
+          },
+          'text-toggle': {
+            title: '/text-toggle',
+            body: ['通知文面のON/OFFを切り替えます。例: `/text-toggle mode: on`'],
+          },
+          'add-time': {
+            title: '/add-time',
+            body: [
+              '時報を追加します。**HH:mm** か **cron** のどちらかを指定してください。',
+              '例: `/add-time time: 09:00`（毎日9時）',
+              '例: `/add-time cron: "0 0 * * * *"`（毎正時）',
+              'オプション: `tz`（例: Asia/Tokyo）',
+            ],
+          },
+          'remove-time': {
+            title: '/remove-time',
+            body: ['`/list` の番号で時刻を削除します。例: `/remove-time index: 1`'],
+          },
+          'list': {
+            title: '/list',
+            body: ['現在の設定（通知先・音源・登録時刻など）を表示します。'],
+          },
+          'test': {
+            title: '/test',
+            body: [
+              'すぐに1回だけ再生します。テキスト通知がONなら投稿も行います。',
+            ],
+          },
+          'config-export': {
+            title: '/config-export（予備）',
+            body: [
+              '`settings.ini` に現在の設定を書き出します（配布向けの設定ファイル）。',
+              '通常運用では不要です。',
+            ],
+          },
+          'config-reload': {
+            title: '/config-reload（予備）',
+            body: [
+              '`settings.ini` を読み込み直して反映します（自動反映が効かない場合の予備）。',
+            ],
+          },
+        };
+
+        // 一覧（ショート版）
+        const embed = new EmbedBuilder()
+          .setTitle('🛟 ヘルプ — コマンド一覧')
+          .setDescription(lines.join('\n'))
+          .setFooter({ text: '詳しくは /help command:<コマンド名> で個別ヘルプ' })
+          .setTimestamp(new Date());
+
+        await interaction.reply({ embeds: [embed], ephemeral: true });
+        break;
+      }
+
     }
   } catch (e) {
     console.error(e);
