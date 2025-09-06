@@ -35,6 +35,7 @@ if (!TOKEN || !CLIENT_ID) {
 const CONFIG_PATH = path.join(__dirname, 'settings.ini');
 let activeGuildId = null; // 実際に適用するサーバーID（.env優先／未指定なら最初に操作されたサーバー）
 let lastIniWrite = 0;     // 自動保存直後の監視イベントをスキップするためのタイムスタンプ
+let bootstrapped = false; // 初期ロード完了までは settings.ini へ書き出さない
 
 // 内部ストレージ（JSON）
 const STORE_PATH = path.join(__dirname, 'storage.json');
@@ -48,6 +49,12 @@ function saveStore(data) {
   fs.writeFileSync(STORE_PATH, JSON.stringify(data, null, 2));
 }
 let store = loadStore();
+
+// 直近で使ったギルドがあれば、それを事前に候補にしておく
+const storedGuildIds = Object.keys(store.guilds || {});
+if (!ACTIVE_GUILD_ID && storedGuildIds.length && !activeGuildId) {
+  activeGuildId = storedGuildIds[0];
+}
 
 // ジョブ管理
 const jobsByGuild = new Map();
@@ -73,7 +80,7 @@ function ensureGuildConfig(guildId) {
     store.guilds[guildId] = {
       textChannelId: null,
       voiceChannelId: null,
-      audioFile: 'chime.mp3',
+      audioFile: 'chime.wav',
       textEnabled: true,
       times: [], // { cron: "0 0 9 * * *", tz: "Asia/Tokyo" }
     };
@@ -110,7 +117,7 @@ function setDefaultTextChannel(guildId, channelId) {
   if (!cfg.textChannelId) {
     cfg.textChannelId = channelId;
     saveStore(store);
-    exportSettingsIni(guildId);
+    if (bootstrapped) exportSettingsIni(guildId);
   }
 }
 
@@ -193,6 +200,10 @@ function rebuildJobsForGuild(guildId) {
 // ---- settings.ini 単一ファイル I/O ----
 function exportSettingsIni(guildId) {
   if (!guildId) return null;
+  // 単一 settings.ini 運用なので、アクティブなギルド以外からの書き出しは無効化
+  if (activeGuildId && guildId !== activeGuildId) {
+    return null
+  }
   const cfg = ensureGuildConfig(guildId);
   const tz = cfg.times[0]?.tz || DEFAULT_TZ;
   const hhmmList = cfg.times.map(t => cronToHHmm(t.cron)).filter(Boolean);
@@ -202,7 +213,7 @@ function exportSettingsIni(guildId) {
     general: {
       timezone: tz,
       text_enabled: !!cfg.textEnabled,
-      audio_file: cfg.audioFile || 'chime.mp3',
+      audio_file: cfg.audioFile || 'chime.wav',
       text_channel_id: cfg.textChannelId || '',
       voice_channel_id: cfg.voiceChannelId || '',
       times: hhmmList.join(','),        // HH:mm カンマ区切り
@@ -211,6 +222,7 @@ function exportSettingsIni(guildId) {
   };
   fs.writeFileSync(CONFIG_PATH, ini.stringify(data), 'utf-8');
   lastIniWrite = Date.now();
+  console.log(`[ini] wrote settings.ini (audio_file=${cfg.audioFile}, tz=${tz})`);
   return CONFIG_PATH;
 }
 
@@ -277,9 +289,12 @@ client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   console.log(generateDependencyReport()); // 依存状況を起動時にログ
 
-  // 適用対象サーバーを決定（.env優先／なければ最初のサーバー）
-  const firstGuild = client.guilds.cache.first();
-  setActiveGuildIfNeeded(firstGuild?.id || null);
+  // 適用先サーバーを決定（.env優先 → 過去に使ったGuild → いま入っているGuild）
+  const storedGuildIds = Object.keys(store.guilds || {});
+  const firstFromStore = storedGuildIds[0] || null;
+  const firstFromCache = client.guilds.cache.first()?.id || null;
+  setActiveGuildIfNeeded(firstFromStore || firstFromCache);
+
 
   // 既存Guildのジョブ復元
   for (const guildId of Object.keys(store.guilds || {})) {
@@ -291,6 +306,9 @@ client.once('ready', () => {
     if (fs.existsSync(CONFIG_PATH)) applySettingsIni(activeGuildId);
     else exportSettingsIni(activeGuildId);
   }
+
+  // ← 初期ロードが完了。ここから export を許可
+  bootstrapped = true;
 
   // settings.ini を監視（手編集→自動反映）
   fs.watchFile(CONFIG_PATH, { interval: 500 }, () => {
@@ -321,6 +339,13 @@ client.on('interactionCreate', async (interaction) => {
   // 最後に操作されたサーバーをアクティブに
   setActiveGuildIfNeeded(interaction.guildId);
 
+  // ★ 起動時に apply できていない場合、最初の操作で先に settings.ini を適用
+  if (!bootstrapped && activeGuildId) {
+    if (fs.existsSync(CONFIG_PATH)) applySettingsIni(activeGuildId);
+    else exportSettingsIni(activeGuildId);
+    bootstrapped = true;
+  }
+
   // テキストチャンネルの自動反映
   setDefaultTextChannel(interaction.guildId, interaction.channelId);
 
@@ -337,7 +362,7 @@ client.on('interactionCreate', async (interaction) => {
         cfg.voiceChannelId = channel.id; // ボイスチャンネルのIDセット
         cfg.textChannelId = interaction.channelId;  // テキストチャンネルのIDセット
         saveStore(store);
-        exportSettingsIni(guildId);
+        if (bootstrapped) exportSettingsIni(guildId);
 
         const joinOptions = {
           channelId: channel.id,
@@ -358,7 +383,7 @@ client.on('interactionCreate', async (interaction) => {
         if (conn) conn.destroy();
         cfg.voiceChannelId = null;
         saveStore(store);
-        exportSettingsIni(guildId);
+        if (bootstrapped) exportSettingsIni(guildId);
         rebuildJobsForGuild(guildId);
         await interaction.reply('ボイスチャンネルから退出しました。');
         break;
@@ -372,7 +397,7 @@ client.on('interactionCreate', async (interaction) => {
         }
         cfg.audioFile = file;
         saveStore(store);
-        exportSettingsIni(guildId);
+        if (bootstrapped) exportSettingsIni(guildId);
         await interaction.reply({ embeds: [replySettingsEmbed(cfg)] });
         break;
       }
@@ -380,7 +405,7 @@ client.on('interactionCreate', async (interaction) => {
       case 'set-text-channel': {
         cfg.textChannelId = interaction.channelId;
         saveStore(store);
-        exportSettingsIni(guildId);
+        if (bootstrapped) exportSettingsIni(guildId);
         await interaction.reply({ embeds: [replySettingsEmbed(cfg)] });
         break;
       }
@@ -389,7 +414,7 @@ client.on('interactionCreate', async (interaction) => {
         const mode = interaction.options.getString('mode', true);
         cfg.textEnabled = (mode === 'on');
         saveStore(store);
-        exportSettingsIni(guildId);
+        if (bootstrapped) exportSettingsIni(guildId);
         await interaction.reply({ embeds: [replySettingsEmbed(cfg)] });
         break;
       }
@@ -424,7 +449,7 @@ client.on('interactionCreate', async (interaction) => {
 
         cfg.times.push({ cron: cronExp, tz });
         saveStore(store);
-        exportSettingsIni(guildId);
+        if (bootstrapped) exportSettingsIni(guildId);
         rebuildJobsForGuild(guildId);
 
         const shown = timeStr ?? (cronToHHmm(cronExp) || cronExp);
@@ -442,7 +467,7 @@ client.on('interactionCreate', async (interaction) => {
         }
         cfg.times.splice(index - 1, 1);
         saveStore(store);
-        exportSettingsIni(guildId);
+        if (bootstrapped) exportSettingsIni(guildId);
         rebuildJobsForGuild(guildId);
         await interaction.reply({ content: '削除しました。', embeds: [replySettingsEmbed(cfg)] });
         break;
@@ -525,7 +550,7 @@ client.on('interactionCreate', async (interaction) => {
             title: '/set-audio',
             body: [
               '再生する音源ファイルを `audio/` から選びます（拡張子まで一致）。',
-              '例: `/set-audio file: chime.mp3`',
+              '例: `/set-audio file: chime.wav`',
             ],
           },
           'set-text-channel': {

@@ -9,7 +9,7 @@ module.exports = [
     .setName('set-audio')
     .setDescription('再生する音声ファイル（audio/配下）を設定します')
     .addStringOption(opt =>
-      opt.setName('file').setDescription('例: chime.mp3').setRequired(true)
+      opt.setName('file').setDescription('例: chime.wav').setRequired(true)
     ),
 
   new SlashCommandBuilder()
