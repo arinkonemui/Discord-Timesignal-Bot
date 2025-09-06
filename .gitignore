@@ -24,3 +24,6 @@ discord-time-signal/audio/**/*.mp3
 discord-time-signal/audio/**/*.txt
 discord-time-signal/audio/**
 !discord-time-signal/audio/.gitkeep
+
+#DISCORD時報BOTフォルダの一部を無視
+資料/**
