@@ -5,7 +5,8 @@
       "voiceChannelId": "1413194788521513135",
       "audioFile": "Test_Time_Anaunce2.wav",
       "textEnabled": true,
-      "times": []
+      "times": [],
+      "messageTemplate": "テスト用のメッセージやで～！"
     }
   }
 }

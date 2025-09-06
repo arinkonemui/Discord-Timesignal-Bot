@@ -25,6 +25,16 @@ module.exports = [
         .setRequired(true)
         .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' })
     ),
+  
+  // 時報テキスト設定
+  new SlashCommandBuilder()
+  .setName('set-message')
+  .setDescription('時報のメッセージ文面テンプレートを設定します（{time},{HH},{mm} 使用可）')
+  .addStringOption(opt =>
+    opt.setName('template')
+      .setDescription('例: ⏰ {time} の時報です')
+      .setRequired(true)
+  ),
 
   // HH:mm形式
   new SlashCommandBuilder()

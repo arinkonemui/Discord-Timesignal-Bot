@@ -82,6 +82,7 @@ function ensureGuildConfig(guildId) {
       voiceChannelId: null,
       audioFile: 'chime.wav',
       textEnabled: true,
+      messageTemplate: '⏰ {time} の時報です',
       times: [], // { cron: "0 0 9 * * *", tz: "Asia/Tokyo" }
     };
     saveStore(store);
@@ -93,6 +94,7 @@ function replySettingsEmbed(cfg) {
   const embed = new EmbedBuilder()
     .setTitle('⏰ 時報ボット設定')
     .addFields(
+      { name: 'メッセージ', value: (cfg.messageTemplate || '（未設定）').slice(0, 200), inline: false },
       { name: 'テキスト通知', value: cfg.textEnabled ? 'ON' : 'OFF', inline: true },
       { name: '通知チャンネル', value: cfg.textChannelId ? `<#${cfg.textChannelId}>` : '未設定', inline: true },
       { name: '音声ファイル', value: cfg.audioFile || '未設定', inline: true },
@@ -121,6 +123,16 @@ function setDefaultTextChannel(guildId, channelId) {
   }
 }
 
+function renderMessage(cfg, now = new Date()) {
+  const tz = (cfg.times[0]?.tz) || DEFAULT_TZ;
+  const timeStr = now.toLocaleTimeString('ja-JP', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
+  const [HH, mm] = timeStr.split(':');
+  const tpl = cfg.messageTemplate || '⏰ {time} の時報です';
+  return tpl
+    .replace(/\{time\}/g, `${HH}:${mm}`)
+    .replace(/\{HH\}/g, HH)
+    .replace(/\{mm\}/g, mm);
+}
 
 async function playOnce(guildId) {
   const cfg = ensureGuildConfig(guildId);
@@ -185,8 +197,7 @@ function rebuildJobsForGuild(guildId) {
     const job = cron.schedule(cronExp, async () => {
       try {
         const now = new Date();
-        const hh = now.toLocaleTimeString('ja-JP', { hour12: false });
-        await postTextIfEnabled(guildId, `⏰ 時報です（${hh}）`);
+        await postTextIfEnabled(guildId, renderMessage(cfg, now));
         await playOnce(guildId);
       } catch (e) {
         console.error('Scheduled run error:', e);
@@ -214,6 +225,7 @@ function exportSettingsIni(guildId) {
       timezone: tz,
       text_enabled: !!cfg.textEnabled,
       audio_file: cfg.audioFile || 'chime.wav',
+      message_template: cfg.messageTemplate || '⏰ {time} の時報です',
       text_channel_id: cfg.textChannelId || '',
       voice_channel_id: cfg.voiceChannelId || '',
       times: hhmmList.join(','),        // HH:mm カンマ区切り
@@ -251,6 +263,7 @@ function applySettingsIni(guildId) {
   const cfg = ensureGuildConfig(guildId);
   if (typeof g.text_enabled !== 'undefined') cfg.textEnabled = String(g.text_enabled).toLowerCase() === 'true';
   if (g.audio_file)       cfg.audioFile = g.audio_file;
+  if (g.message_template) cfg.messageTemplate = g.message_template;
   if (g.text_channel_id)  cfg.textChannelId = g.text_channel_id;
   if (g.voice_channel_id) cfg.voiceChannelId = g.voice_channel_id;
   if (times.length)       cfg.times = times;
@@ -402,6 +415,26 @@ client.on('interactionCreate', async (interaction) => {
         break;
       }
 
+      case 'set-message': {
+        const template = interaction.options.getString('template', true);
+        cfg.messageTemplate = template;
+        saveStore(store);
+        if (bootstrapped) exportSettingsIni(guildId);
+
+        const preview = renderMessage(cfg, new Date());
+        const embed = new EmbedBuilder()
+          .setTitle('📝 メッセージテンプレートを更新しました')
+          .addFields(
+            { name: 'Template', value: '```\n' + template.slice(0, 500) + '\n```' },
+            { name: 'Preview', value: preview }
+          )
+          .setTimestamp(new Date());
+
+        await interaction.reply({ embeds: [embed] });
+        break;
+      }
+
+
       case 'set-text-channel': {
         cfg.textChannelId = interaction.channelId;
         saveStore(store);
@@ -481,8 +514,7 @@ client.on('interactionCreate', async (interaction) => {
       case 'test': {
         await interaction.reply({ content: '🔧 テストを実行します…' }); // 先に即時応答
         const now = new Date();
-        const hh = now.toLocaleTimeString('ja-JP', { hour12: false });
-        await postTextIfEnabled(guildId, `🔔 テスト時報（${hh}）`);
+        await postTextIfEnabled(guildId, '🔧 テスト: ' + renderMessage(cfg, new Date()));
         await playOnce(guildId);
         await interaction.editReply('✅ テスト再生完了です。');
         break;
@@ -516,6 +548,7 @@ client.on('interactionCreate', async (interaction) => {
           '`/join` — 今いるボイスチャンネルに参加',
           '`/leave` — ボイスチャンネルから退出',
           '`/set-audio file:<name>` — 再生する音声ファイルを設定（audio/配下）',
+          '`/set-message` — 時報設定時の文面を設定',
           '`/text-toggle mode:<on|off>` — テキスト通知のON/OFF',
           '`/help` — このヘルプを表示',
           '',
