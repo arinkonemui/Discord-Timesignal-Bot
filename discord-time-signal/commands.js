@@ -56,6 +56,19 @@ module.exports = [
       opt.setName('tz')
       .setDescription('タイムゾーン（例: Asia/Tokyo）')
       .setRequired(false)
+    )
+
+    // ★ この時刻だけのメッセージテンプレ
+    .addStringOption(opt =>
+      opt.setName('message')
+      .setDescription('この時刻だけのメッセージテンプレ（{time},{HH},{mm} 使用可）')
+      .setRequired(false)
+    )
+    // ★ この時刻だけの音源ファイル
+    .addStringOption(opt =>
+      opt.setName('file')
+      .setDescription('この時刻だけの音源（audio/配下のファイル名）')
+      .setRequired(false)
     ),
 
   new SlashCommandBuilder()
@@ -63,6 +76,28 @@ module.exports = [
     .setDescription('登録済みの時刻を削除します（/list の番号）')
     .addIntegerOption(opt =>
       opt.setName('index').setDescription('削除する番号（1始まり）').setRequired(true)
+    ),
+
+  // ★ 既存の時刻エントリに「個別の音源」を設定
+  new SlashCommandBuilder()
+    .setName('set-time-audio')
+    .setDescription('登録済みの時刻に個別の音源ファイルを設定します')
+    .addIntegerOption(opt =>
+      opt.setName('index').setDescription('対象の番号（/list の番号）').setRequired(true)
+    )
+    .addStringOption(opt =>
+      opt.setName('file').setDescription('音源ファイル名（audio/配下）').setRequired(true)
+    ),
+
+  // ★ 既存の時刻エントリに「個別のメッセージ」を設定
+  new SlashCommandBuilder()
+    .setName('set-time-message')
+    .setDescription('登録済みの時刻に個別のメッセージテンプレを設定します')
+    .addIntegerOption(opt =>
+      opt.setName('index').setDescription('対象の番号（/list の番号）').setRequired(true)
+    )
+    .addStringOption(opt =>
+      opt.setName('template').setDescription('テンプレ（{time},{HH},{mm} 使用可）').setRequired(true)
     ),
 
   new SlashCommandBuilder()
