@@ -107,6 +107,14 @@ module.exports = [
     .setName('test')
     .setDescription('すぐに一度だけ再生します（テキストON時は投稿も）'),
 
+  // 指定した時刻エントリの設定でテスト再生
+  new SlashCommandBuilder()
+    .setName('test-time')
+    .setDescription('登録済みの時刻（index）の設定でテスト再生します')
+    .addIntegerOption(opt =>
+      opt.setName('index').setDescription('対象の番号（/list の番号）').setRequired(true)
+    ),
+
   // settings.ini の出力／再読込
   new SlashCommandBuilder()
     .setName('config-export')

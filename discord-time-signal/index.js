@@ -92,7 +92,7 @@ function ensureGuildConfig(guildId) {
 }
 
 function replySettingsEmbed(cfg) {
-  // 行を作る（1フィールドに収める）
+  // 行を作る（1フィールドに収める）: 1024字超えは末尾に省略表示
   const lines = cfg.times.length
     ? cfg.times.map((t, i) => {
         const hhmm = cronToHHmm(t.cron);
@@ -230,12 +230,12 @@ function rebuildJobsForGuild(guildId) {
   jobsByGuild.set(guildId, []);
 
   const cfg = ensureGuildConfig(guildId);
-    cfg.times.forEach((entry) => {
-      const cronExp = entry.cron;
-      const tz = entry.tz || DEFAULT_TZ;
-      const msgTpl = entry.messageTemplate || cfg.messageTemplate;
-      const audio = entry.audioFile || cfg.audioFile;
-      const job = cron.schedule(cronExp, async () => {
+  cfg.times.forEach((entry) => {
+    const cronExp = entry.cron;
+    const tz = entry.tz || DEFAULT_TZ;
+    const msgTpl = entry.messageTemplate || cfg.messageTemplate;
+    const audio = entry.audioFile || cfg.audioFile;
+    const job = cron.schedule(cronExp, async () => {
       try {
         const now = new Date();
         await postTextIfEnabled(guildId, renderMessageWith(msgTpl, tz, now));
@@ -257,11 +257,11 @@ function exportSettingsIni(guildId) {
     return null
   }
   const cfg = ensureGuildConfig(guildId);
-    const tz = cfg.times[0]?.tz || DEFAULT_TZ;
-    const hhmmList = cfg.times.map(t => cronToHHmm(t.cron)).filter(Boolean);
-    const advList  = cfg.times.map(t => (cronToHHmm(t.cron) ? null : t.cron)).filter(Boolean);
+  const tz = cfg.times[0]?.tz || DEFAULT_TZ;
+  const hhmmList = cfg.times.map(t => cronToHHmm(t.cron)).filter(Boolean);
+  const advList  = cfg.times.map(t => (cronToHHmm(t.cron) ? null : t.cron)).filter(Boolean);
 
-    const data = {
+  const data = {
     general: {
       timezone: tz,
       text_enabled: !!cfg.textEnabled,
@@ -274,7 +274,7 @@ function exportSettingsIni(guildId) {
     }
   };
 
-  // ★ per-time セクションも出力（time.1, time.2, ...）
+  // per-time セクションも出力（time.1, time.2, ...）
   cfg.times.forEach((t, idx) => {
     const sec = {};
     const hh = cronToHHmm(t.cron);
@@ -307,7 +307,7 @@ function applySettingsIni(guildId) {
   if (g.text_channel_id)  cfg.textChannelId = g.text_channel_id;
   if (g.voice_channel_id) cfg.voiceChannelId = g.voice_channel_id;
 
-  // ★ per-time セクション（あればこちらを優先）
+  // per-time セクション（あればこちらを優先）
   const timeSections = Object.keys(parsed).filter(k => /^time\.\d+$/.test(k)).sort((a, b) => {
     const ia = parseInt(a.split('.')[1], 10);
     const ib = parseInt(b.split('.')[1], 10);
@@ -373,15 +373,30 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
 });
 
-client.once('ready', () => {
+client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   console.log(generateDependencyReport()); // 依存状況を起動時にログ
 
+  // ★ 重複掃除（必要なときだけ環境変数で有効化）
+  if (process.env.CLEAR_GLOBAL === '1') {
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
+    console.log('🧹 Cleared ALL GLOBAL commands.');
+  }
+  if (process.env.CLEAR_GUILD === '1') {
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+    for (const g of client.guilds.cache.values()) {
+      await rest.put(Routes.applicationGuildCommands(CLIENT_ID, g.id), { body: [] });
+      console.log(`🧹 Cleared commands for guild ${g.id}`);
+    }
+  }
+
   // 適用先サーバーを決定（.env優先 → 過去に使ったGuild → いま入っているGuild）
-  const storedGuildIds = Object.keys(store.guilds || {});
-  const firstFromStore = storedGuildIds[0] || null;
+  // const storedGuildIds = Object.keys(store.guilds || {});
+  // const firstFromStore = storedGuildIds[0] || null;
   const firstFromCache = client.guilds.cache.first()?.id || null;
-  setActiveGuildIfNeeded(firstFromStore || firstFromCache);
+  // setActiveGuildIfNeeded(firstFromStore || firstFromCache);
+  setActiveGuildIfNeeded(activeGuildId || firstFromCache);
 
 
   // 既存Guildのジョブ復元
@@ -411,7 +426,7 @@ client.once('ready', () => {
   });
 
   // コマンド登録：グローバル + いま入っているサーバーへ即時
-  registerGlobalCommands().catch(console.error);
+  // registerGlobalCommands().catch(console.error);
   client.guilds.cache.forEach(g => registerGuildCommands(g.id).catch(console.error));
 });
 
@@ -648,10 +663,31 @@ client.on('interactionCreate', async (interaction) => {
 
       case 'test': {
         await interaction.reply({ content: '🔧 テストを実行します…' }); // 先に即時応答
-        const preview = renderMessageWith(cfg.messageTemplate, (cfg.times[0]?.tz)||DEFAULT_TZ, new Date());
+        const preview = renderMessage(cfg, new Date());
         await postTextIfEnabled(guildId, '🔧 テスト: ' + preview);
         await playOnce(guildId, cfg.audioFile);
         await interaction.editReply('✅ テスト再生完了です。');
+        break;
+      }
+
+      case 'test-time': {
+        const index = interaction.options.getInteger('index', true);
+        if (index < 1 || index > cfg.times.length) {
+          return interaction.reply({ content: '番号が不正です。/list で確認してください。', ephemeral: true });
+        }
+        await interaction.reply({ content: `🧪 #${index} の設定でテスト中…` });
+
+        const entry = cfg.times[index - 1];
+        const tz    = entry.tz || DEFAULT_TZ;
+        const tpl   = entry.messageTemplate || cfg.messageTemplate;
+        const audio = entry.audioFile || cfg.audioFile;
+
+        const preview = renderMessageWith(tpl, tz, new Date());
+        await postTextIfEnabled(guildId, '🧪 テスト: ' + preview);
+        await playOnce(guildId, audio);
+        await interaction.editReply(
+          `✅ #${index} の設定でテスト完了（${cronToHHmm(entry.cron) || entry.cron} / ${tz}）`
+        );
         break;
       }
 
@@ -685,13 +721,18 @@ client.on('interactionCreate', async (interaction) => {
           '`/set-time-message index:<N> template:<...>` — ★既存時刻に個別メッセージを設定',
           '`/text-toggle mode:<on|off>` — テキスト通知のON/OFF',
           '`/help` — このヘルプを表示',
+          
           '',
           '【スケジュール】',
-          '`/add-time time:<HH:mm>  または  cron:"..." [tz:<TZ>]` — 時刻を追加（HH:mm推奨）',
+          '`/add-time time:<HH:mm> | cron:"..." [tz] [message] [file]` — ★この時刻だけの message/file を同時設定可',
           '`/set-time-audio index:<N> file:<name>` — ★既存時刻に個別音源を設定',
           '`/set-time-message index:<N> template:<...>` — ★既存時刻に個別メッセージを設定',
           '`/remove-time index:<N>` — 登録済みの時刻を削除（/listの番号）',
           '`/list` — 現在の設定を表示',
+          '',
+          '【テストコマンド】',
+          '`/test` — 既定の設定でテスト再生',
+          '`/test-time index:<N>` — 指定エントリの設定でテスト再生',
           '',
           '【以下は通常は使用しないでOK】',
           '`/set-audio file:<name>` — 既定の音源を設定（audio/配下）',
