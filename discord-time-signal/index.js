@@ -15,8 +15,6 @@ const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
 const ini = require('ini');
-
-// FFmpeg（mp3/wav再生用）。見つかれば環境変数へ。
 const ffmpeg = require('ffmpeg-static');
 if (ffmpeg) process.env.FFMPEG_PATH = ffmpeg;
 
@@ -24,21 +22,23 @@ if (ffmpeg) process.env.FFMPEG_PATH = ffmpeg;
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const DEFAULT_TZ = process.env.TZ || 'Asia/Tokyo';
-const ACTIVE_GUILD_ID = process.env.ACTIVE_GUILD_ID || null; // 単一サーバー固定したいときだけ指定
-
 if (!TOKEN || !CLIENT_ID) {
   console.error('❌ .env の DISCORD_TOKEN / CLIENT_ID を設定してください。');
   process.exit(1);
 }
 
-// 人が編集する設定ファイル（単一）
-const CONFIG_PATH = path.join(__dirname, 'settings.ini');
-let activeGuildId = null; // 実際に適用するサーバーID（.env優先／未指定なら最初に操作されたサーバー）
-let lastIniWrite = 0;     // 自動保存直後の監視イベントをスキップするためのタイムスタンプ
-let bootstrapped = false; // 初期ロード完了までは settings.ini へ書き出さない
+// ディレクトリ & パス
+const ROOT_CATALOG_PATH = path.join(__dirname, 'settings.ini');         // ルートは「カタログ」
+const CONFIGS_DIR = path.join(__dirname, 'configs');                     // 人が触る、ギルド専用 ini を置く
+const STORE_PATH = path.join(__dirname, 'storage.json');                 // 内部状態（人は触らない）
+const AUDIO_DIR = path.join(__dirname, 'audio');
+if (!fs.existsSync(CONFIGS_DIR)) fs.mkdirSync(CONFIGS_DIR, { recursive: true });
+if (!fs.existsSync(AUDIO_DIR)) fs.mkdirSync(AUDIO_DIR, { recursive: true });
 
-// 内部ストレージ（JSON）
-const STORE_PATH = path.join(__dirname, 'storage.json');
+// パス関数
+const guildIniPath = (gid) => path.join(CONFIGS_DIR, `${gid}.ini`);
+
+// 内部ストア
 function loadStore() {
   if (!fs.existsSync(STORE_PATH)) {
     fs.writeFileSync(STORE_PATH, JSON.stringify({ guilds: {} }, null, 2));
@@ -47,19 +47,17 @@ function loadStore() {
 }
 function saveStore(data) {
   fs.writeFileSync(STORE_PATH, JSON.stringify(data, null, 2));
+  try {
+    const st = fs.statSync(STORE_PATH);
+    console.log(`[store] wrote ${STORE_PATH} @ ${st.mtime.toISOString()}`);
+  } catch {}
 }
 let store = loadStore();
-
-// 直近で使ったギルドがあれば、それを事前に候補にしておく
-const storedGuildIds = Object.keys(store.guilds || {});
-if (!ACTIVE_GUILD_ID && storedGuildIds.length && !activeGuildId) {
-  activeGuildId = storedGuildIds[0];
-}
 
 // ジョブ管理
 const jobsByGuild = new Map();
 
-// ---- ユーティリティ ----
+// 小道具
 function hhmmToCron(hhmm) {
   const m = hhmm.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
   if (!m) return null;
@@ -83,179 +81,27 @@ function ensureGuildConfig(guildId) {
       audioFile: 'chime.wav',
       textEnabled: true,
       messageTemplate: '⏰ {time} の時報です',
-      // times: [{ cron, tz, audioFile?, messageTemplate? }]
-      times: [],
+      times: [], // [{ cron, tz, audioFile?, messageTemplate? }]
     };
     saveStore(store);
   }
   return store.guilds[guildId];
 }
 
-function replySettingsEmbed(cfg) {
-  // 行を作る（1フィールドに収める）: 1024字超えは末尾に省略表示
-  const lines = cfg.times.length
-    ? cfg.times.map((t, i) => {
-        const hhmm = cronToHHmm(t.cron);
-        const base = hhmm ? hhmm : `\`${t.cron}\``;
-        const parts = [];
-        if (t.audioFile) parts.push(`audio: \`${t.audioFile}\``);
-        if (t.messageTemplate) {
-          const s = String(t.messageTemplate);
-          parts.push(`msg: "${s.slice(0,30)}${s.length>30?'…':''}"`);
-        }
-        const opt = parts.length ? ' | ' + parts.join(' / ') : '';
-        return `${i + 1}. ${base} (${t.tz || DEFAULT_TZ})${opt}`;
-      })
-    : ['なし'];
-
-  const MAX = 1024;
-  const overflowNote = '（多すぎるため以下省略。/config-export で settings.ini を参照してください）';
-  const suffix = `\n…\n${overflowNote}`;
-  const reserve = cfg.times.length > 0 ? suffix.length : 0; // 省略時だけ付ける
-
-  let value = '';
-  for (const line of lines) {
-    const add = (value ? '\n' : '') + line;
-    // 省略メッセージ分を予約しておき、超えそうなら打ち切り
-    if (value.length + add.length + (lines.length > 0 ? reserve : 0) > MAX) {
-      value += suffix;
-      break;
-    }
-    value += add;
+// ルート settings.ini を「カタログ」用途で出力（ギルド名 ↔ ini パス）
+function writeGuildCatalog(client, activeGuildId = null) {
+  const obj = { catalog: {} };
+  for (const g of client.guilds.cache.values()) {
+    const safeName = String(g.name).replace(/[\r\n]/g, ' ').replace(/=/g, '＝');
+    obj.catalog[safeName] = `configs/${g.id}.ini`;
   }
-
-  const embed = new EmbedBuilder()
-    .setTitle('⏰ 時報ボット設定')
-    .addFields(
-      { name: 'メッセージ（既定）', value: (cfg.messageTemplate || '（未設定）').slice(0, 200), inline: false },
-      { name: 'テキスト通知', value: cfg.textEnabled ? 'ON' : 'OFF', inline: true },
-      { name: '通知チャンネル', value: cfg.textChannelId ? `<#${cfg.textChannelId}>` : '未設定', inline: true },
-      { name: '音声ファイル（既定）', value: cfg.audioFile || '未設定', inline: true },
-      { name: 'ボイスチャンネル', value: cfg.voiceChannelId ? `<#${cfg.voiceChannelId}>` : '未設定', inline: true },
-      { name: '登録時刻', value }
-    )
-    .setTimestamp(new Date());
-  return embed;
+  obj.catalog['_active_guild_id'] = activeGuildId || '(none)';
+  fs.writeFileSync(ROOT_CATALOG_PATH, ini.stringify(obj), 'utf-8');
+  console.log(`[ini] wrote catalog to ${ROOT_CATALOG_PATH}`);
 }
 
-// 個別テンプレ＋TZで文面を組み立て
-function renderMessageWith(template, tz, now = new Date()) {
-  const timeStr = now.toLocaleTimeString('ja-JP', {
-    timeZone: tz || DEFAULT_TZ, hour: '2-digit', minute: '2-digit', hour12: false
-  });
-  const [HH, mm] = timeStr.split(':');
-  const tpl = template || '⏰ {time} の時報です';
-  return tpl.replace(/\{time\}/g, `${HH}:${mm}`).replace(/\{HH\}/g, HH).replace(/\{mm\}/g, mm);
-}
-
-// 既定テンプレでの文面（後方互換）
-function setDefaultTextChannel(guildId, channelId) {
-  const cfg = ensureGuildConfig(guildId);
-  if (!cfg.textChannelId) {
-    cfg.textChannelId = channelId;
-    saveStore(store);
-    if (bootstrapped) exportSettingsIni(guildId);
-  }
-}
-
-function renderMessage(cfg, now = new Date()) {
-  const tz = (cfg.times[0]?.tz) || DEFAULT_TZ;
-  const timeStr = now.toLocaleTimeString('ja-JP', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
-  const [HH, mm] = timeStr.split(':');
-  const tpl = cfg.messageTemplate || '⏰ {time} の時報です';
-  return tpl
-    .replace(/\{time\}/g, `${HH}:${mm}`)
-    .replace(/\{HH\}/g, HH)
-    .replace(/\{mm\}/g, mm);
-}
-
-
-async function playOnce(guildId, audioOverride = null) {
-  const cfg = ensureGuildConfig(guildId);
-  if (!cfg.voiceChannelId) throw new Error('voiceChannelが未設定です。/join で参加してください。');
-
-  const voiceChannel = await client.channels.fetch(cfg.voiceChannelId).catch(() => null);
-  if (!voiceChannel) throw new Error('voiceChannelが見つかりません。');
-
-  let connection = getVoiceConnection(guildId);
-  if (!connection) {
-    const joinOptions = {
-      channelId: voiceChannel.id,
-      guildId,
-      adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-      selfDeaf: true,
-    };
-    // DAVE を無効化したい場合は .env に DAVE_DISABLE=1 を入れる
-    if (process.env.DAVE_DISABLE === '1') {
-      // @snazzah/davey が未導入の環境向けの一時回避
-      joinOptions.daveEncryption = false;
-    }
-    connection = joinVoiceChannel(joinOptions);
-  }
-
-  const fileName = audioOverride || cfg.audioFile;
-  const filePath = path.join(__dirname, 'audio', fileName);
-  if (!fs.existsSync(filePath)) {
-    const dir = path.join(__dirname, 'audio');
-    const files = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
-    throw new Error(
-      `音声ファイルが見つかりません: ${fileName}\n` +
-      `探した場所: ${filePath}\n` +
-      `audio/にあるファイル: [${files.join(', ')}]`
-    );
-  }
-
-  const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
-  const resource = createAudioResource(filePath);
-  connection.subscribe(player);
-  player.play(resource);
-
-  return new Promise((resolve, reject) => {
-    player.on(AudioPlayerStatus.Idle, () => resolve());
-    player.on('error', (e) => reject(e));
-  });
-}
-
-async function postTextIfEnabled(guildId, messageText) {
-  const cfg = ensureGuildConfig(guildId);
-  if (!cfg.textEnabled || !cfg.textChannelId) return;
-  const ch = await client.channels.fetch(cfg.textChannelId).catch(() => null);
-  if (!ch) return;
-  await ch.send(messageText);
-}
-
-function rebuildJobsForGuild(guildId) {
-  const current = jobsByGuild.get(guildId) || [];
-  current.forEach(job => job.stop());
-  jobsByGuild.set(guildId, []);
-
-  const cfg = ensureGuildConfig(guildId);
-  cfg.times.forEach((entry) => {
-    const cronExp = entry.cron;
-    const tz = entry.tz || DEFAULT_TZ;
-    const msgTpl = entry.messageTemplate || cfg.messageTemplate;
-    const audio = entry.audioFile || cfg.audioFile;
-    const job = cron.schedule(cronExp, async () => {
-      try {
-        const now = new Date();
-        await postTextIfEnabled(guildId, renderMessageWith(msgTpl, tz, now));
-        await playOnce(guildId, audio);
-      } catch (e) {
-        console.error('Scheduled run error:', e);
-      }
-    }, { timezone: tz });
-    job.start();
-    jobsByGuild.get(guildId).push(job);
-  });
-}
-
-// ---- settings.ini 単一ファイル I/O ----
-function exportSettingsIni(guildId) {
-  if (!guildId) return null;
-  // 単一 settings.ini 運用なので、アクティブなギルド以外からの書き出しは無効化
-  if (activeGuildId && guildId !== activeGuildId) {
-    return null
-  }
+// ギルド専用 ini の入出力
+function exportGuildIni(guildId) {
   const cfg = ensureGuildConfig(guildId);
   const tz = cfg.times[0]?.tz || DEFAULT_TZ;
   const hhmmList = cfg.times.map(t => cronToHHmm(t.cron)).filter(Boolean);
@@ -269,12 +115,10 @@ function exportSettingsIni(guildId) {
       message_template: cfg.messageTemplate || '⏰ {time} の時報です',
       text_channel_id: cfg.textChannelId || '',
       voice_channel_id: cfg.voiceChannelId || '',
-      times: hhmmList.join(','),        // HH:mm カンマ区切り
-      advanced_cron: advList.join(','), // 変換できない cron はここへ
+      times: hhmmList.join(','),
+      advanced_cron: advList.join(','),
     }
   };
-
-  // per-time セクションも出力（time.1, time.2, ...）
   cfg.times.forEach((t, idx) => {
     const sec = {};
     const hh = cronToHHmm(t.cron);
@@ -285,20 +129,19 @@ function exportSettingsIni(guildId) {
     data[`time.${idx + 1}`] = sec;
   });
 
-  fs.writeFileSync(CONFIG_PATH, ini.stringify(data), 'utf-8');
-  lastIniWrite = Date.now();
-  console.log(`[ini] wrote settings.ini (audio_file=${cfg.audioFile}, tz=${tz})`);
-  return CONFIG_PATH;
+  const p = guildIniPath(guildId);
+  fs.writeFileSync(p, ini.stringify(data), 'utf-8');
+  console.log(`[ini] wrote ${p}`);
+  return p;
 }
 
-function applySettingsIni(guildId) {
-  if (!guildId) return;
-  if (!fs.existsSync(CONFIG_PATH)) return; // 無ければ何もしない（初回は export で作成）
-  const parsed = ini.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
-  const g = parsed.general || parsed;
+function applyGuildIni(guildId) {
+  const p = guildIniPath(guildId);
+  if (!fs.existsSync(p)) return false;
 
+  const parsed = ini.parse(fs.readFileSync(p, 'utf-8'));
+  const g = parsed.general || parsed;
   const tzDefault = g.timezone || DEFAULT_TZ;
-  const times = [];
 
   const cfg = ensureGuildConfig(guildId);
   if (typeof g.text_enabled !== 'undefined') cfg.textEnabled = String(g.text_enabled).toLowerCase() === 'true';
@@ -307,12 +150,9 @@ function applySettingsIni(guildId) {
   if (g.text_channel_id)  cfg.textChannelId = g.text_channel_id;
   if (g.voice_channel_id) cfg.voiceChannelId = g.voice_channel_id;
 
-  // per-time セクション（あればこちらを優先）
-  const timeSections = Object.keys(parsed).filter(k => /^time\.\d+$/.test(k)).sort((a, b) => {
-    const ia = parseInt(a.split('.')[1], 10);
-    const ib = parseInt(b.split('.')[1], 10);
-    return ia - ib;
-  });
+  const times = [];
+  const timeSections = Object.keys(parsed).filter(k => /^time\.\d+$/.test(k))
+    .sort((a,b)=>parseInt(a.split('.')[1])-parseInt(b.split('.')[1]));
   if (timeSections.length > 0) {
     for (const key of timeSections) {
       const sec = parsed[key] || {};
@@ -326,7 +166,6 @@ function applySettingsIni(guildId) {
       times.push(t);
     }
   } else {
-    // 従来フィールド（times / advanced_cron）から構築
     const timesStr = String(g.times || '').trim();
     if (timesStr) {
       for (const t of timesStr.split(',').map(s => s.trim()).filter(Boolean)) {
@@ -345,139 +184,251 @@ function applySettingsIni(guildId) {
 
   saveStore(store);
   rebuildJobsForGuild(guildId);
+  console.log(`[ini] applied ${p}`);
+  return true;
 }
 
-function setActiveGuildIfNeeded(candidateId) {
-  if (ACTIVE_GUILD_ID) { activeGuildId = ACTIVE_GUILD_ID; return; }
-  if (!activeGuildId && candidateId) activeGuildId = candidateId;
+// 表示
+function replySettingsEmbed(cfg, guildName = '') {
+  const lines = cfg.times.length
+    ? cfg.times.map((t, i) => {
+        const hhmm = cronToHHmm(t.cron);
+        const base = hhmm ? hhmm : `\`${t.cron}\``;
+        const parts = [];
+        if (t.audioFile) parts.push(`audio: \`${t.audioFile}\``);
+        if (t.messageTemplate) {
+          const s = String(t.messageTemplate);
+          parts.push(`msg: "${s.slice(0,30)}${s.length>30?'…':''}"`);
+        }
+        const opt = parts.length ? ' | ' + parts.join(' / ') : '';
+        return `${i + 1}. ${base} (${t.tz || DEFAULT_TZ})${opt}`;
+      })
+    : ['なし'];
+
+  const MAX = 1024;
+  const overflowNote = '（多すぎるため以下省略。configs/<GuildID>.ini をご確認ください）';
+  const suffix = `\n…\n${overflowNote}`;
+  const reserve = cfg.times.length > 0 ? suffix.length : 0;
+
+  let value = '';
+  for (const line of lines) {
+    const add = (value ? '\n' : '') + line;
+    if (value.length + add.length + (lines.length > 0 ? reserve : 0) > MAX) {
+      value += suffix;
+      break;
+    }
+    value += add;
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle(`⏰ 時報ボット設定${guildName ? ` — ${guildName}` : ''}`)
+    .addFields(
+      { name: 'メッセージ（既定）', value: (cfg.messageTemplate || '（未設定）').slice(0, 200), inline: false },
+      { name: 'テキスト通知', value: cfg.textEnabled ? 'ON' : 'OFF', inline: true },
+      { name: '通知チャンネル', value: cfg.textChannelId ? `<#${cfg.textChannelId}>` : '未設定', inline: true },
+      { name: '音声ファイル（既定）', value: cfg.audioFile || '未設定', inline: true },
+      { name: 'ボイスチャンネル', value: cfg.voiceChannelId ? `<#${cfg.voiceChannelId}>` : '未設定', inline: true },
+      { name: '登録時刻', value }
+    )
+    .setTimestamp(new Date());
+  return embed;
 }
 
-// ---- スラッシュコマンド登録（Global + Guild 即時）----
-async function registerGlobalCommands() {
-  const commands = require('./commands.js');
-  const rest = new REST({ version: '10' }).setToken(TOKEN);
-  console.log('🛠 Registering GLOBAL:', commands.map(c => c.name).join(', '));
-  await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-  console.log('🌐 Registered GLOBAL commands（反映に時間がかかる場合あり）');
+// 文面
+function renderMessageWith(template, tz, now = new Date()) {
+  const timeStr = now.toLocaleTimeString('ja-JP', { timeZone: tz || DEFAULT_TZ, hour: '2-digit', minute: '2-digit', hour12: false });
+  const [HH, mm] = timeStr.split(':');
+  const tpl = template || '⏰ {time} の時報です';
+  return tpl.replace(/\{time\}/g, `${HH}:${mm}`).replace(/\{HH\}/g, HH).replace(/\{mm\}/g, mm);
 }
+function renderMessage(cfg, now = new Date()) {
+  const tz = (cfg.times[0]?.tz) || DEFAULT_TZ;
+  const timeStr = now.toLocaleTimeString('ja-JP', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
+  const [HH, mm] = timeStr.split(':');
+  const tpl = cfg.messageTemplate || '⏰ {time} の時報です';
+  return tpl.replace(/\{time\}/g, `${HH}:${mm}`).replace(/\{HH\}/g, HH).replace(/\{mm\}/g, mm);
+}
+
+// 再生
+async function playOnce(guildId, audioOverride = null) {
+  const cfg = ensureGuildConfig(guildId);
+  if (!cfg.voiceChannelId) throw new Error('voiceChannelが未設定です。/join で参加してください。');
+  const voiceChannel = await client.channels.fetch(cfg.voiceChannelId).catch(() => null);
+  if (!voiceChannel) throw new Error('voiceChannelが見つかりません。');
+
+  let connection = getVoiceConnection(guildId);
+  if (!connection) {
+    const joinOptions = {
+      channelId: voiceChannel.id,
+      guildId,
+      adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+      selfDeaf: true,
+    };
+    if (process.env.DAVE_DISABLE === '1') joinOptions.daveEncryption = false;
+    connection = joinVoiceChannel(joinOptions);
+  }
+
+  const fileName = audioOverride || cfg.audioFile;
+  const filePath = path.join(AUDIO_DIR, fileName);
+  if (!fs.existsSync(filePath)) {
+    const files = fs.existsSync(AUDIO_DIR) ? fs.readdirSync(AUDIO_DIR) : [];
+    throw new Error(
+      `音声ファイルが見つかりません: ${fileName}\n` +
+      `探した場所: ${filePath}\n` +
+      `audio/にあるファイル: [${files.join(', ')}]`
+    );
+  }
+
+  const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
+  const resource = createAudioResource(filePath);
+  connection.subscribe(player);
+  player.play(resource);
+  return new Promise((resolve, reject) => {
+    player.on(AudioPlayerStatus.Idle, () => resolve());
+    player.on('error', (e) => reject(e));
+  });
+}
+
+// テキスト
+async function postTextIfEnabled(guildId, messageText) {
+  const cfg = ensureGuildConfig(guildId);
+  if (!cfg.textEnabled || !cfg.textChannelId) return;
+  const ch = await client.channels.fetch(cfg.textChannelId).catch(() => null);
+  if (!ch) return;
+  await ch.send(messageText);
+}
+
+// ジョブ
+function rebuildJobsForGuild(guildId) {
+  const current = jobsByGuild.get(guildId) || [];
+  current.forEach(job => job.stop());
+  jobsByGuild.set(guildId, []);
+
+  const cfg = ensureGuildConfig(guildId);
+  cfg.times.forEach((entry) => {
+    const cronExp = entry.cron;
+    const tz = entry.tz || DEFAULT_TZ;
+    const msgTpl = entry.messageTemplate || cfg.messageTemplate;
+    const audio = entry.audioFile || cfg.audioFile;
+    const job = cron.schedule(cronExp, async () => {
+      try {
+        const now = new Date();
+        await postTextIfEnabled(guildId, renderMessageWith(msgTpl, tz, now));
+        if (!ensureGuildConfig(guildId).voiceChannelId) {
+          console.warn(`[${guildId}] voiceChannelId is not set. Skipping audio playback.`);
+          return;
+        }
+        await playOnce(guildId, audio);
+      } catch (e) {
+        console.error(`[${guildId}] Scheduled run error:`, e);
+      }
+    }, { timezone: tz });
+    job.start();
+    jobsByGuild.get(guildId).push(job);
+  });
+}
+
+// ---- スラッシュコマンド登録（ギルドのみ）----
 async function registerGuildCommands(guildId) {
   const commands = require('./commands.js');
   const rest = new REST({ version: '10' }).setToken(TOKEN);
   console.log(`🛠 Registering GUILD ${guildId}:`, commands.map(c => c.name).join(', '));
   await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guildId), { body: commands });
-  console.log(`⚡ Registered GUILD commands for ${guildId}（即時反映）`);
+  console.log(`⚡ Registered GUILD commands for ${guildId}`);
 }
 
 // ---- クライアント ----
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
-});
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
 
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
-  console.log(generateDependencyReport()); // 依存状況を起動時にログ
+  console.log(generateDependencyReport());
 
-  // ★ 重複掃除（必要なときだけ環境変数で有効化）
-  if (process.env.CLEAR_GLOBAL === '1') {
-    const rest = new REST({ version: '10' }).setToken(TOKEN);
-    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
-    console.log('🧹 Cleared ALL GLOBAL commands.');
-  }
-  if (process.env.CLEAR_GUILD === '1') {
-    const rest = new REST({ version: '10' }).setToken(TOKEN);
-    for (const g of client.guilds.cache.values()) {
-      await rest.put(Routes.applicationGuildCommands(CLIENT_ID, g.id), { body: [] });
-      console.log(`🧹 Cleared commands for guild ${g.id}`);
-    }
+  // 既存ギルドぶんコマンド登録
+  client.guilds.cache.forEach(g => registerGuildCommands(g.id).catch(console.error));
+
+  // 既存ジョブ復元（スケジュールがあるギルドのみ）
+  for (const gid of Object.keys(store.guilds || {})) {
+    const c = ensureGuildConfig(gid);
+    if ((c.times || []).length > 0) rebuildJobsForGuild(gid);
   }
 
-  // 適用先サーバーを決定（.env優先 → 過去に使ったGuild → いま入っているGuild）
-  // const storedGuildIds = Object.keys(store.guilds || {});
-  // const firstFromStore = storedGuildIds[0] || null;
-  const firstFromCache = client.guilds.cache.first()?.id || null;
-  // setActiveGuildIfNeeded(firstFromStore || firstFromCache);
-  setActiveGuildIfNeeded(activeGuildId || firstFromCache);
+  // ルートにカタログ（ギルド名 ↔ ini）を書き出し
+  writeGuildCatalog(client, null);
 
-
-  // 既存Guildのジョブ復元
-  for (const guildId of Object.keys(store.guilds || {})) {
-    rebuildJobsForGuild(guildId);
-  }
-
-  // settings.ini があれば読込、なければ初回書き出し
-  if (activeGuildId) {
-    if (fs.existsSync(CONFIG_PATH)) applySettingsIni(activeGuildId);
-    else exportSettingsIni(activeGuildId);
-  }
-
-  // ← 初期ロードが完了。ここから export を許可
-  bootstrapped = true;
-
-  // settings.ini を監視（手編集→自動反映）
-  fs.watchFile(CONFIG_PATH, { interval: 500 }, () => {
-    if (!activeGuildId) return;
-    if (Date.now() - lastIniWrite < 1000) return; // 直前の自動保存は無視
+  // configs/ の自動反映（任意・軽い監視）
+  fs.watch(CONFIGS_DIR, { persistent: false }, (event, filename) => {
+    if (!filename || !filename.endsWith('.ini')) return;
+    const gid = path.basename(filename, '.ini');
+    if (!/^\d+$/.test(gid)) return;
+    // 反映
     try {
-      applySettingsIni(activeGuildId);
-      console.log('🔄 Reloaded settings from settings.ini');
+      if (applyGuildIni(gid)) {
+        console.log(`🔄 reloaded by file change: ${filename}`);
+      }
     } catch (e) {
-      console.error('INI reload failed:', e.message);
+      console.error(`reload failed for ${filename}:`, e.message);
     }
   });
-
-  // コマンド登録：グローバル + いま入っているサーバーへ即時
-  // registerGlobalCommands().catch(console.error);
-  client.guilds.cache.forEach(g => registerGuildCommands(g.id).catch(console.error));
 });
 
-// 新しく招待されたサーバーにも即時登録
 client.on('guildCreate', (guild) => {
   registerGuildCommands(guild.id).catch(console.error);
+  writeGuildCatalog(client, null);
 });
 
-// ---- スラッシュコマンド ----
+// ---- コマンド処理 ----
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  // 最後に操作されたサーバーをアクティブに
-  setActiveGuildIfNeeded(interaction.guildId);
-
-  // ★ 起動時に apply できていない場合、最初の操作で先に settings.ini を適用
-  if (!bootstrapped && activeGuildId) {
-    if (fs.existsSync(CONFIG_PATH)) applySettingsIni(activeGuildId);
-    else exportSettingsIni(activeGuildId);
-    bootstrapped = true;
-  }
-
-  // テキストチャンネルの自動反映
-  setDefaultTextChannel(interaction.guildId, interaction.channelId);
-
-  const { guildId, member } = interaction;
+  const guildId = interaction.guildId;
+  const guildName = interaction.guild?.name || '';
+  const member = interaction.member;
   const cfg = ensureGuildConfig(guildId);
+
+  // 既定のテキストチャンネル自動セット（未設定時だけ）
+  if (!cfg.textChannelId) {
+    cfg.textChannelId = interaction.channelId;
+    saveStore(store);
+  }
 
   try {
     switch (interaction.commandName) {
+      // --- 基本 ---
       case 'join': {
         if (!member?.voice?.channel) {
           return interaction.reply({ content: 'ボイスチャンネルに参加した状態で実行してください。', ephemeral: true });
         }
         const channel = member.voice.channel;
-        cfg.voiceChannelId = channel.id; // ボイスチャンネルのIDセット
-        cfg.textChannelId = interaction.channelId;  // テキストチャンネルのIDセット
+        // 1) ID保存
+        cfg.voiceChannelId = channel.id;
+        cfg.textChannelId  = interaction.channelId;
         saveStore(store);
-        if (bootstrapped) exportSettingsIni(guildId);
+        console.log(`[join] saved guild=${guildId} voiceChannelId=${cfg.voiceChannelId} textChannelId=${cfg.textChannelId}`);
 
-        const joinOptions = {
-          channelId: channel.id,
-          guildId,
-          adapterCreator: channel.guild.voiceAdapterCreator,
-          selfDeaf: true,
-        };
+        // 2) ini を用意（無ければテンプレ生成）→ 読み込み
+        const p = guildIniPath(guildId);
+        if (!fs.existsSync(p)) {
+          exportGuildIni(guildId); // 初期テンプレ（現状のcfgを書き出し）
+        }
+        applyGuildIni(guildId);    // ini → json 反映 & ジョブ再構築
+
+        // 3) 参加 & 応答
+        const joinOptions = { channelId: channel.id, guildId, adapterCreator: channel.guild.voiceAdapterCreator, selfDeaf: true };
         if (process.env.DAVE_DISABLE === '1') joinOptions.daveEncryption = false;
         joinVoiceChannel(joinOptions);
 
+        // 4) iniへIDを書き戻し（人が見ても分かるように）
+        const parsed = ini.parse(fs.readFileSync(p, 'utf-8'));
+        const g = parsed.general || (parsed.general = {});
+        g.text_channel_id = cfg.textChannelId || '';
+        g.voice_channel_id = cfg.voiceChannelId || '';
+        fs.writeFileSync(p, ini.stringify(parsed), 'utf-8');
+
+        writeGuildCatalog(client, null);
         rebuildJobsForGuild(guildId);
-        await interaction.reply({ content: `参加しました：<#${channel.id}> に接続します。` });
+
+        await interaction.reply({ content: `参加しました：<#${channel.id}> に接続します。\n設定ファイル: \`configs/${guildId}.ini\`（IDも書き戻しました）` });
         break;
       }
 
@@ -486,7 +437,6 @@ client.on('interactionCreate', async (interaction) => {
         if (conn) conn.destroy();
         cfg.voiceChannelId = null;
         saveStore(store);
-        if (bootstrapped) exportSettingsIni(guildId);
         rebuildJobsForGuild(guildId);
         await interaction.reply('ボイスチャンネルから退出しました。');
         break;
@@ -494,14 +444,14 @@ client.on('interactionCreate', async (interaction) => {
 
       case 'set-audio': {
         const file = interaction.options.getString('file', true);
-        const full = path.join(__dirname, 'audio', file);
+        const full = path.join(AUDIO_DIR, file);
         if (!fs.existsSync(full)) {
           return interaction.reply({ content: `audio/${file} が見つかりません。`, ephemeral: true });
         }
         cfg.audioFile = file;
         saveStore(store);
-        if (bootstrapped) exportSettingsIni(guildId);
-        await interaction.reply({ embeds: [replySettingsEmbed(cfg)] });
+        exportGuildIni(guildId);
+        await interaction.reply({ embeds: [replySettingsEmbed(cfg, guildName)] });
         break;
       }
 
@@ -509,27 +459,30 @@ client.on('interactionCreate', async (interaction) => {
         const template = interaction.options.getString('template', true);
         cfg.messageTemplate = template;
         saveStore(store);
-        if (bootstrapped) exportSettingsIni(guildId);
-
+        exportGuildIni(guildId);
         const preview = renderMessage(cfg, new Date());
         const embed = new EmbedBuilder()
-          .setTitle('📝 メッセージテンプレートを更新しました')
-          .addFields(
-            { name: 'Template', value: '```\n' + template.slice(0, 500) + '\n```' },
-            { name: 'Preview', value: preview }
-          )
+          .setTitle('📝 メッセージテンプレを更新しました')
+          .addFields({ name: 'Template', value: '```\n' + template.slice(0, 500) + '\n```' }, { name: 'Preview', value: preview })
           .setTimestamp(new Date());
-
         await interaction.reply({ embeds: [embed] });
         break;
       }
 
-
       case 'set-text-channel': {
         cfg.textChannelId = interaction.channelId;
         saveStore(store);
-        if (bootstrapped) exportSettingsIni(guildId);
-        await interaction.reply({ embeds: [replySettingsEmbed(cfg)] });
+        exportGuildIni(guildId);
+        await interaction.reply({ embeds: [replySettingsEmbed(cfg, guildName)] });
+        break;
+      }
+
+      case 'set-voice-channel': {
+        const ch = interaction.options.getChannel('channel', true);
+        cfg.voiceChannelId = ch.id;
+        saveStore(store);
+        exportGuildIni(guildId);
+        await interaction.reply({ content: `🎙 ボイスチャンネルを <#${ch.id}> に設定しました。` });
         break;
       }
 
@@ -537,88 +490,70 @@ client.on('interactionCreate', async (interaction) => {
         const mode = interaction.options.getString('mode', true);
         cfg.textEnabled = (mode === 'on');
         saveStore(store);
-        if (bootstrapped) exportSettingsIni(guildId);
-        await interaction.reply({ embeds: [replySettingsEmbed(cfg)] });
+        exportGuildIni(guildId);
+        await interaction.reply({ embeds: [replySettingsEmbed(cfg, guildName)] });
         break;
       }
 
+      // --- スケジュール ---
       case 'add-time': {
         const timeStr = interaction.options.getString('time');
         const cronExpInput = interaction.options.getString('cron');
         const tz = interaction.options.getString('tz') || null;
         const perMsg = interaction.options.getString('message') || null;
         const perFile = interaction.options.getString('file') || null;
-
         if (!timeStr && !cronExpInput) {
-          return interaction.reply({
-            content: 'HH:mm または cron を1つ指定してください。例: /add-time time:"09:00"',
-            ephemeral: true
-          });
+          return interaction.reply({ content: 'HH:mm または cron を1つ指定してください。例: /add-time time:"09:00"', ephemeral: true });
         }
         if (timeStr && cronExpInput) {
-          return interaction.reply({
-            content: 'HH:mm と cron は同時指定できません。どちらか一方にしてください。',
-            ephemeral: true
-          });
+          return interaction.reply({ content: 'HH:mm と cron は同時指定できません。', ephemeral: true });
         }
-
         let cronExp = cronExpInput;
         if (timeStr) {
           const c = hhmmToCron(timeStr);
           if (!c) return interaction.reply({ content: 'HH:mm の形式が不正です（例: 09:00）', ephemeral: true });
           cronExp = c;
         }
-        if (!cron.validate(cronExp)) {
-          return interaction.reply({ content: 'cron式が不正です。例: 0 0 9 * * *', ephemeral: true });
-        }
+        if (!cron.validate(cronExp)) return interaction.reply({ content: 'cron式が不正です。例: 0 0 9 * * *', ephemeral: true });
 
-        // ★ 個別ファイルが指定された場合は存在チェック
         if (perFile) {
-          const full = path.join(__dirname, 'audio', perFile);
-          if (!fs.existsSync(full)) {
-            return interaction.reply({ content: `audio/${perFile} が見つかりません。`, ephemeral: true });
-          }
+          const full = path.join(AUDIO_DIR, perFile);
+          if (!fs.existsSync(full)) return interaction.reply({ content: `audio/${perFile} が見つかりません。`, ephemeral: true });
         }
-
         const entry = { cron: cronExp, tz };
         if (perMsg)  entry.messageTemplate = perMsg;
         if (perFile) entry.audioFile = perFile;
         cfg.times.push(entry);
         saveStore(store);
-        if (bootstrapped) exportSettingsIni(guildId);
+        exportGuildIni(guildId);
         rebuildJobsForGuild(guildId);
 
         const shown = timeStr ?? (cronToHHmm(cronExp) || cronExp);
         await interaction.reply({
-          content:
-            `追加しました：**${shown}**（${tz || DEFAULT_TZ}）`
-            + (perFile ? ` | audio: \`${perFile}\`` : '')
-            + (perMsg  ? ` | msg: "${perMsg.slice(0,30)}${perMsg.length>30?'…':''}"` : ''),
-          embeds: [replySettingsEmbed(cfg)]
+          content: `追加しました：**${shown}**（${tz || DEFAULT_TZ}）` +
+            (perFile ? ` | audio: \`${perFile}\`` : '') +
+            (perMsg  ? ` | msg: "${perMsg.slice(0,30)}${perMsg.length>30?'…':''}"` : ''),
+          embeds: [replySettingsEmbed(cfg, guildName)]
         });
         break;
       }
 
-      // ★ 既存エントリに個別の音源を設定
       case 'set-time-audio': {
         const index = interaction.options.getInteger('index', true);
         const file = interaction.options.getString('file', true);
         if (index < 1 || index > cfg.times.length) {
           return interaction.reply({ content: '番号が不正です。/list で確認してください。', ephemeral: true });
         }
-        const full = path.join(__dirname, 'audio', file);
-        if (!fs.existsSync(full)) {
-          return interaction.reply({ content: `audio/${file} が見つかりません。`, ephemeral: true });
-        }
+        const full = path.join(AUDIO_DIR, file);
+        if (!fs.existsSync(full)) return interaction.reply({ content: `audio/${file} が見つかりません。`, ephemeral: true });
         cfg.times[index - 1].audioFile = file;
         saveStore(store);
-        if (bootstrapped) exportSettingsIni(guildId);
+        exportGuildIni(guildId);
         rebuildJobsForGuild(guildId);
-        await interaction.reply({ content: `#${index} に audio: \`${file}\` を設定しました。`, embeds: [replySettingsEmbed(cfg)] });
+        await interaction.reply({ content: `#${index} に audio: \`${file}\` を設定しました。`, embeds: [replySettingsEmbed(cfg, guildName)] });
         break;
       }
 
-      // ★ 既存エントリに個別のメッセージを設定
       case 'set-time-message': {
         const index = interaction.options.getInteger('index', true);
         const tpl = interaction.options.getString('template', true);
@@ -627,17 +562,13 @@ client.on('interactionCreate', async (interaction) => {
         }
         cfg.times[index - 1].messageTemplate = tpl;
         saveStore(store);
-        if (bootstrapped) exportSettingsIni(guildId);
+        exportGuildIni(guildId);
         rebuildJobsForGuild(guildId);
-
         const tz = cfg.times[index - 1].tz || DEFAULT_TZ;
         const preview = renderMessageWith(tpl, tz, new Date());
         const embed = new EmbedBuilder()
           .setTitle(`📝 #${index} のメッセージを更新しました`)
-          .addFields(
-            { name: 'Template', value: '```\n' + tpl.slice(0, 500) + '\n```' },
-            { name: 'Preview', value: preview }
-          )
+          .addFields({ name: 'Template', value: '```\n' + tpl.slice(0, 500) + '\n```' }, { name: 'Preview', value: preview })
           .setTimestamp(new Date());
         await interaction.reply({ embeds: [embed] });
         break;
@@ -650,19 +581,20 @@ client.on('interactionCreate', async (interaction) => {
         }
         cfg.times.splice(index - 1, 1);
         saveStore(store);
-        if (bootstrapped) exportSettingsIni(guildId);
+        exportGuildIni(guildId);
         rebuildJobsForGuild(guildId);
-        await interaction.reply({ content: '削除しました。', embeds: [replySettingsEmbed(cfg)] });
+        await interaction.reply({ content: '削除しました。', embeds: [replySettingsEmbed(cfg, guildName)] });
         break;
       }
 
       case 'list': {
-        await interaction.reply({ embeds: [replySettingsEmbed(cfg)] });
+        await interaction.reply({ embeds: [replySettingsEmbed(cfg, guildName)] });
         break;
       }
 
+      // --- テスト ---
       case 'test': {
-        await interaction.reply({ content: '🔧 テストを実行します…' }); // 先に即時応答
+        await interaction.reply({ content: '🔧 テストを実行します…' });
         const preview = renderMessage(cfg, new Date());
         await postTextIfEnabled(guildId, '🔧 テスト: ' + preview);
         await playOnce(guildId, cfg.audioFile);
@@ -676,155 +608,167 @@ client.on('interactionCreate', async (interaction) => {
           return interaction.reply({ content: '番号が不正です。/list で確認してください。', ephemeral: true });
         }
         await interaction.reply({ content: `🧪 #${index} の設定でテスト中…` });
-
         const entry = cfg.times[index - 1];
-        const tz    = entry.tz || DEFAULT_TZ;
-        const tpl   = entry.messageTemplate || cfg.messageTemplate;
+        const tz = entry.tz || DEFAULT_TZ;
+        const tpl = entry.messageTemplate || cfg.messageTemplate;
         const audio = entry.audioFile || cfg.audioFile;
-
         const preview = renderMessageWith(tpl, tz, new Date());
         await postTextIfEnabled(guildId, '🧪 テスト: ' + preview);
         await playOnce(guildId, audio);
-        await interaction.editReply(
-          `✅ #${index} の設定でテスト完了（${cronToHHmm(entry.cron) || entry.cron} / ${tz}）`
-        );
+        await interaction.editReply(`✅ #${index} の設定でテスト完了（${cronToHHmm(entry.cron) || entry.cron} / ${tz}）`);
         break;
       }
 
-      case 'config-export': {
-        try {
-          const p = exportSettingsIni(guildId);
-          await interaction.reply({ content: `📝 設定を書き出しました：\`${p}\`\nこのファイル（settings.ini）は保存時に自動で反映されます。` });
-        } catch (e) {
-          await interaction.reply({ content: `エクスポートに失敗：${e.message}`, ephemeral: true });
+      // --- ファイル連携（iniを正とする） ---
+      case 'sync-settings': {
+        const ok = applyGuildIni(guildId);
+        writeGuildCatalog(client, null);
+        if (!ok) {
+          return interaction.reply({ content: `configs/${guildId}.ini が見つかりませんでした。/join を先に実行してください。`, ephemeral: true });
         }
+        await interaction.reply({ content: `🔄 configs/${guildId}.ini を反映しました。`, embeds: [replySettingsEmbed(ensureGuildConfig(guildId), guildName)] });
         break;
       }
 
-      case 'config-reload': {
-        try {
-          applySettingsIni(guildId);
-          await interaction.reply({ content: '🔄 settings.ini を読み込み、設定を反映しました。', embeds: [replySettingsEmbed(ensureGuildConfig(guildId))] });
-        } catch (e) {
-          await interaction.reply({ content: `読み込みに失敗：${e.message}`, ephemeral: true });
+      case 'copy-settings': {
+        const toArg = interaction.options.getString('to', true).trim();
+        // コピー元（現在ギルド）の ini を読む（無ければ生成）
+        if (!fs.existsSync(guildIniPath(guildId))) exportGuildIni(guildId);
+        const srcParsed = ini.parse(fs.readFileSync(guildIniPath(guildId), 'utf-8'));
+        // voice/text はコピーしない
+        if (srcParsed.general) {
+          delete srcParsed.general.text_channel_id;
+          delete srcParsed.general.voice_channel_id;
         }
+
+        // 対象決定
+        let targetIds = [];
+        if (toArg.toLowerCase() === 'all') {
+          targetIds = [...client.guilds.cache.keys()].filter(id => id !== guildId);
+        } else {
+          targetIds = toArg.split(',').map(s => s.trim()).filter(Boolean);
+        }
+        if (targetIds.length === 0) {
+          return interaction.reply({ content: 'コピー先がありません。to: all または guildIdのカンマ区切りで指定してください。', ephemeral: true });
+        }
+
+        // 各ギルドへ書き込み＆適用
+        const done = [];
+        for (const tid of targetIds) {
+          try {
+            const p = guildIniPath(tid);
+            let dst = {};
+            if (fs.existsSync(p)) dst = ini.parse(fs.readFileSync(p,'utf-8'));
+            // マージ（generalは上書き。ただし text/voice は既存優先）
+            const gn = dst.general || {};
+            const sn = srcParsed.general || {};
+            dst.general = Object.assign({}, gn, sn);
+            if (gn.text_channel_id) dst.general.text_channel_id = gn.text_channel_id;
+            if (gn.voice_channel_id) dst.general.voice_channel_id = gn.voice_channel_id;
+            // time.* は全面置換（見通しのため）
+            Object.keys(dst).forEach(k => { if (/^time\.\d+$/.test(k)) delete dst[k]; });
+            Object.keys(srcParsed).forEach(k => { if (/^time\.\d+$/.test(k)) dst[k] = srcParsed[k]; });
+
+            fs.writeFileSync(p, ini.stringify(dst), 'utf-8');
+            applyGuildIni(tid);
+            done.push(`${client.guilds.cache.get(tid)?.name || tid}`);
+          } catch (e) {
+            console.error('copy failed:', tid, e);
+          }
+        }
+        writeGuildCatalog(client, null);
+        await interaction.reply({ content: `📤 このサーバーの設定をコピーして適用しました → ${done.join(', ')}` });
         break;
       }
-      /*******************/
-      // helpコマンド定義
-      /*******************/
+
+      // --- デバッグ ---
+      case 'debug-config': {
+        const lines = [
+          `guildId: \`${guildId}\` (${guildName})`,
+          `textChannelId: \`${cfg.textChannelId || '(none)'}\``,
+          `voiceChannelId: \`${cfg.voiceChannelId || '(none)'}\``,
+          `times: ${cfg.times.length} 件`,
+          `ini: \`configs/${guildId}.ini\``,
+        ];
+        await interaction.reply({ content: lines.join('\n'), ephemeral: true });
+        break;
+      }
+
+      case 'debug-paths': {
+        const s = [];
+        s.push(`cwd: \`${process.cwd()}\``);
+        s.push(`__dirname: \`${__dirname}\``);
+        const p = guildIniPath(guildId);
+        const ts = (f) => fs.existsSync(f) ? new Date(fs.statSync(f).mtime).toISOString() : '(missing)';
+        s.push(`guild ini: \`${p}\` (mtime: ${ts(p)})`);
+        s.push(`catalog: \`${ROOT_CATALOG_PATH}\` (mtime: ${ts(ROOT_CATALOG_PATH)})`);
+        s.push(`storage: \`${STORE_PATH}\` (mtime: ${ts(STORE_PATH)})`);
+        await interaction.reply({ content: s.join('\n'), ephemeral: true });
+        break;
+      }
+
+      case 'save-store': {
+        saveStore(store);
+        const st = fs.existsSync(STORE_PATH) ? fs.statSync(STORE_PATH) : null;
+        const when = st ? st.mtime.toISOString() : '(missing)';
+        await interaction.reply({ content: `💾 保存しました。mtime: ${when}\nSTORE_PATH: \`${STORE_PATH}\``, ephemeral: true });
+        break;
+      }
+
+      case 'debug-store': {
+        const obj = ensureGuildConfig(guildId);
+        const dump = JSON.stringify(obj, null, 2);
+        const max = 1800;
+        const body = dump.length > max ? dump.slice(0, max) + '\n…(truncated)' : dump;
+        const st = fs.existsSync(STORE_PATH) ? fs.statSync(STORE_PATH) : null;
+        const when = st ? st.mtime.toISOString() : '(missing)';
+        const lines = [
+          `guildId: \`${guildId}\` (${guildName})`,
+          `STORE_PATH: \`${STORE_PATH}\``,
+          `mtime: ${when}`,
+          '```json',
+          body,
+          '```'
+        ];
+        await interaction.reply({ content: lines.join('\n'), ephemeral: true });
+        break;
+      }
+
       case 'help': {
         const lines = [
           '【基本】',
-          '`/join` — 今いるボイスチャンネルに参加',
-          '`/leave` — ボイスチャンネルから退出',
-          '`/set-time-message index:<N> template:<...>` — ★既存時刻に個別メッセージを設定',
+          '`/join` — 参加＆このギルド専用 ini を自動作成・適用。通知先もこのチャンネルに設定',
+          '`/leave` — VCから退出',
+          '`/set-audio file:<name>` — 既定音源（全体）',
+          '`/set-message template:<...>` — 既定メッセ（{time}/{HH}/{mm}）',
+          '`/set-text-channel` / `/set-voice-channel channel:<...>` — 通知／ボイスのID設定',
           '`/text-toggle mode:<on|off>` — テキスト通知のON/OFF',
-          '`/help` — このヘルプを表示',
-          
           '',
           '【スケジュール】',
-          '`/add-time time:<HH:mm> | cron:"..." [tz] [message] [file]` — ★この時刻だけの message/file を同時設定可',
-          '`/set-time-audio index:<N> file:<name>` — ★既存時刻に個別音源を設定',
-          '`/set-time-message index:<N> template:<...>` — ★既存時刻に個別メッセージを設定',
-          '`/remove-time index:<N>` — 登録済みの時刻を削除（/listの番号）',
-          '`/list` — 現在の設定を表示',
+          '`/add-time time:<HH:mm> | cron:"..." [tz] [message] [file]` — この時刻だけの message/file 同時設定可',
+          '`/set-time-audio index:<N> file:<name>` / `/set-time-message index:<N> template:<...>`',
+          '`/remove-time index:<N>` / `/list`',
           '',
-          '【テストコマンド】',
-          '`/test` — 既定の設定でテスト再生',
-          '`/test-time index:<N>` — 指定エントリの設定でテスト再生',
+          '【テスト】',
+          '`/test`（既定） / `/test-time index:<N>`（個別）',
           '',
-          '【以下は通常は使用しないでOK】',
-          '`/set-audio file:<name>` — 既定の音源を設定（audio/配下）',
-          '`/set-message` — 時報設定時の文面を設定',
-          '`/set-text-channel` — このチャンネルを通知先に設定（/joinでも自動設定）',
-          '`/config-export` — settings.iniに書き出し（予備）',
-          '`/config-reload` — settings.iniを読み直し（予備）',
+          '【ファイル】',
+          '`/sync-settings` — このギルドの ini（configs/<guildId>.ini）を反映',
+          '`/copy-settings to:<all|id,...>` — 現ギルドの ini を他ギルドへコピー＆適用（voice/text は上書きしない）',
+          '',
+          '【デバッグ】',
+          '`/debug-config` `/debug-paths` `/save-store` `/debug-store`',
+          '',
+          '※ ルート settings.ini は「カタログ」です（ギルド名 ↔ ini パスの一覧）。',
         ];
-
-        const name = (interaction.options.getString('command') || '').toLowerCase();
-
-        // 詳細ヘルプ定義（必要に応じて追記できます）
-        const details = {
-          'join': {
-            title: '/join',
-            body: [
-              'あなたが入っている**ボイスチャンネル**にBotが参加します。',
-              '同時に「**このテキストチャンネル**」を通知先に設定します。',
-              '例: `/join`',
-            ],
-          },
-          'leave': {
-            title: '/leave',
-            body: ['ボイスチャンネルから退出します。'],
-          },
-          'set-audio': {
-            title: '/set-audio',
-            body: [
-              '再生する音源ファイルを `audio/` から選びます（拡張子まで一致）。',
-              '例: `/set-audio file: chime.wav`',
-            ],
-          },
-          'set-text-channel': {
-            title: '/set-text-channel',
-            body: [
-              '「いまのテキストチャンネル」を通知先として保存します。',
-              '※ /join 実行時も自動でこのチャンネルに設定されます。',
-            ],
-          },
-          'text-toggle': {
-            title: '/text-toggle',
-            body: ['通知文面のON/OFFを切り替えます。例: `/text-toggle mode: on`'],
-          },
-          'add-time': {
-            title: '/add-time',
-            body: [
-              '時報を追加します。**HH:mm** か **cron** のどちらかを指定してください。',
-              '例: `/add-time time: 09:00`（毎日9時）',
-              '例: `/add-time cron: "0 0 * * * *"`（毎正時）',
-              'オプション: `tz`（例: Asia/Tokyo）',
-            ],
-          },
-          'remove-time': {
-            title: '/remove-time',
-            body: ['`/list` の番号で時刻を削除します。例: `/remove-time index: 1`'],
-          },
-          'list': {
-            title: '/list',
-            body: ['現在の設定（通知先・音源・登録時刻など）を表示します。'],
-          },
-          'test': {
-            title: '/test',
-            body: [
-              'すぐに1回だけ再生します。テキスト通知がONなら投稿も行います。',
-            ],
-          },
-          'config-export': {
-            title: '/config-export（予備）',
-            body: [
-              '`settings.ini` に現在の設定を書き出します（配布向けの設定ファイル）。',
-              '通常運用では不要です。',
-            ],
-          },
-          'config-reload': {
-            title: '/config-reload（予備）',
-            body: [
-              '`settings.ini` を読み込み直して反映します（自動反映が効かない場合の予備）。',
-            ],
-          },
-        };
-
-        // 一覧（ショート版）
         const embed = new EmbedBuilder()
-          .setTitle('🛟 ヘルプ — コマンド一覧')
+          .setTitle('🛟 コマンド一覧')
           .setDescription(lines.join('\n'))
-          .setFooter({ text: '詳しくは /help command:<コマンド名> で個別ヘルプ' })
+          .setFooter({ text: 'テンプレは {time}/{HH}/{mm} が使えます。' })
           .setTimestamp(new Date());
-
         await interaction.reply({ embeds: [embed], ephemeral: true });
         break;
       }
-
     }
   } catch (e) {
     console.error(e);
