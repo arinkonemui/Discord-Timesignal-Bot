@@ -19,8 +19,8 @@ Token.txt
 .env
 
 #設定系ファイルを無視
-discord-time-signal/settings.ini
-discord-time-signal/storage.json
+discord-time-signal/*.ini
+discord-time-signal/*age.json
 
 # audio フォルダ内の特定拡張子を無視（再帰）
 discord-time-signal/audio/**/*.wav
