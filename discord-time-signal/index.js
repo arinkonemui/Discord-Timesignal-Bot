@@ -1,13 +1,15 @@
 // index.js
 require('dotenv').config();
 
-const { Client, GatewayIntentBits, REST, Routes, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, EmbedBuilder,MessageFlags,PermissionsBitField,ChannelType, } = require('discord.js');
 const {
   joinVoiceChannel,
   createAudioPlayer,
   NoSubscriberBehavior,
   createAudioResource,
   AudioPlayerStatus,
+  VoiceConnectionStatus,
+  entersState,
   getVoiceConnection,
   generateDependencyReport
 } = require('@discordjs/voice');
@@ -253,8 +255,28 @@ function renderMessage(cfg, now = new Date()) {
 async function playOnce(guildId, audioOverride = null) {
   const cfg = ensureGuildConfig(guildId);
   if (!cfg.voiceChannelId) throw new Error('voiceChannelが未設定です。/join で参加してください。');
-  const voiceChannel = await client.channels.fetch(cfg.voiceChannelId).catch(() => null);
+  console.log(`[voice] target guild=${guildId} voiceChannelId=${cfg.voiceChannelId}`);
+  const voiceChannel = await client.channels.fetch(cfg.voiceChannelId).catch((e) => {
+    console.error('[voice] fetch channel failed:', e?.message || e);
+    return null;
+  });
   if (!voiceChannel) throw new Error('voiceChannelが見つかりません。');
+  // Stageチャンネルはスピーカー昇格が必要（まずは通常VCでテスト）
+  //const { ChannelType } = require('discord.js');
+  if (voiceChannel.type === ChannelType.GuildStageVoice) {
+    throw new Error('Stageチャンネルでは再生できません（スピーカー昇格が必要）。通常のボイスチャンネルで /join → /test を試してください。');
+  }
+  const me = await voiceChannel.guild.members.fetch(client.user.id);
+  const perms = voiceChannel.permissionsFor(me);
+  if (!perms?.has(PermissionsBitField.Flags.Connect)) {
+    throw new Error('Bot に「接続」権限がありません（ロール/チャンネル権限を確認）。');
+  }
+  if (!perms?.has(PermissionsBitField.Flags.Speak)) {
+    throw new Error('Bot に「発言」権限がありません（ロール/チャンネル権限を確認）。');
+  }
+  if (me.voice.serverMute) {
+    throw new Error('Bot がサーバーミュートです。ミュート解除してください。');
+  }
 
   let connection = getVoiceConnection(guildId);
   if (!connection) {
@@ -265,11 +287,25 @@ async function playOnce(guildId, audioOverride = null) {
       selfDeaf: true,
     };
     if (process.env.DAVE_DISABLE === '1') joinOptions.daveEncryption = false;
+    console.log('[voice] joinVoiceChannel with', { daveEncryption: !(process.env.DAVE_DISABLE === '1') });
     connection = joinVoiceChannel(joinOptions);
+  } else {
+    console.log('[voice] reuse existing connection');
   }
+
+  // ❶ 接続が Ready になるのを待つ（サーバー差で必須）
+  try {
+    await entersState(connection, VoiceConnectionStatus.Ready, 5_000);
+    console.log('[voice] connection is Ready');
+  } catch (e) {
+    console.error('[voice] connection not ready:', e?.message || e);
+    throw new Error('ボイス接続が安定しませんでした（5秒以内にReadyになりません）。VCや権限を確認してください。');
+  }
+
 
   const fileName = audioOverride || cfg.audioFile;
   const filePath = path.join(AUDIO_DIR, fileName);
+  console.log('[voice] will play file:', filePath);
   if (!fs.existsSync(filePath)) {
     const files = fs.existsSync(AUDIO_DIR) ? fs.readdirSync(AUDIO_DIR) : [];
     throw new Error(
@@ -282,6 +318,10 @@ async function playOnce(guildId, audioOverride = null) {
   const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
   const resource = createAudioResource(filePath);
   connection.subscribe(player);
+  player.on('error', (e) => console.error('[voice] player error:', e));
+  player.on(AudioPlayerStatus.Buffering, () => console.log('[voice] player: Buffering'));
+  player.on(AudioPlayerStatus.Playing,   () => console.log('[voice] player: Playing'));
+  player.on(AudioPlayerStatus.Idle,      () => console.log('[voice] player: Idle'));
   player.play(resource);
   return new Promise((resolve, reject) => {
     player.on(AudioPlayerStatus.Idle, () => resolve());
@@ -595,10 +635,15 @@ client.on('interactionCreate', async (interaction) => {
       // --- テスト ---
       case 'test': {
         await interaction.reply({ content: '🔧 テストを実行します…' });
-        const preview = renderMessage(cfg, new Date());
-        await postTextIfEnabled(guildId, '🔧 テスト: ' + preview);
-        await playOnce(guildId, cfg.audioFile);
-        await interaction.editReply('✅ テスト再生完了です。');
+        try {
+          const preview = renderMessage(cfg, new Date());
+          await postTextIfEnabled(guildId, '🔧 テスト: ' + preview);
+          await playOnce(guildId, cfg.audioFile);
+          await interaction.editReply('✅ テスト再生完了です。');
+        } catch (e) {
+          console.error('[test] failed:', e);
+          await interaction.editReply('❌ テスト再生に失敗しました。\n```\n' + (e?.message || e) + '\n```');
+        }
         break;
       }
 
@@ -731,6 +776,30 @@ client.on('interactionCreate', async (interaction) => {
           '```'
         ];
         await interaction.reply({ content: lines.join('\n'), ephemeral: true });
+        break;
+      }
+
+      case 'debug-voice': {
+        const os = require('os');
+        const chId = cfg.voiceChannelId;
+        if (!chId) return interaction.reply({ content: 'voiceChannelId が未設定です。/join してください。', flags: MessageFlags.Ephemeral });
+
+        const ch = await client.channels.fetch(chId).catch(() => null);
+        if (!ch) return interaction.reply({ content: `ボイスチャンネルが見つかりません: ${chId}`, flags: MessageFlags.Ephemeral });
+
+        const me = await interaction.guild.members.fetch(client.user.id);
+        const perms = ch.permissionsFor(me);
+        //const { ChannelType, PermissionsBitField } = require('discord.js');
+
+        const lines = [];
+        lines.push(`channel: <#${ch.id}> (\`${ch.id}\`)`);
+        lines.push(`type: \`${Object.keys(ChannelType).find(k => ChannelType[k]===ch.type)}\``);
+        lines.push(`serverMute: \`${me.voice.serverMute}\`, serverDeaf: \`${me.voice.serverDeaf}\``);
+        lines.push(`CONNECT: \`${perms?.has(PermissionsBitField.Flags.Connect)}\``);
+        lines.push(`SPEAK:   \`${perms?.has(PermissionsBitField.Flags.Speak)}\``);
+        lines.push(`STREAM:  \`${perms?.has(PermissionsBitField.Flags.Stream)}\``);
+        lines.push(`REQ_SPEAK (Stage): \`${perms?.has(PermissionsBitField.Flags.RequestToSpeak)}\``);
+        await interaction.reply({ content: lines.join('\n'), flags: MessageFlags.Ephemeral });
         break;
       }
 

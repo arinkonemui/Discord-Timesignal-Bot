@@ -114,4 +114,6 @@ module.exports = [
   new SlashCommandBuilder()
     .setName('help')
     .setDescription('コマンド一覧を表示'),
+
+  new SlashCommandBuilder().setName('debug-voice').setDescription('ボイスチャンネルの種別・権限・状態を表示'),
 ].map(c => c.toJSON());
