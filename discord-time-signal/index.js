@@ -464,7 +464,8 @@ client.on('interactionCreate', async (interaction) => {
         writeGuildCatalog(client, null);
         rebuildJobsForGuild(guildId);
 
-        await interaction.reply({ content: `参加しました：<#${channel.id}> に接続します。\n設定ファイル: \`configs/${guildId}.ini\`（IDも書き戻しました）` });
+        //await interaction.reply({ content: `参加しました：<#${channel.id}> に接続します。\n設定ファイル: \`configs/${guildId}.ini\`（IDも書き戻しました）` });
+        await interaction.reply({ content: `参加しました：<#${channel.id}> に接続します。\n設定ファイル: \`configs/${guildId}.ini\`（IDも書き戻しました）`, ephemeral: true });
         break;
       }
 
