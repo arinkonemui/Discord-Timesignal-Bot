@@ -105,12 +105,15 @@ function writeGuildCatalog(client, activeGuildId = null) {
 // ギルド専用 ini の入出力
 function exportGuildIni(guildId) {
   const cfg = ensureGuildConfig(guildId);
+  const gobj = client.guilds.cache.get(guildId);
+  const serverName = gobj?.name || '';
   const tz = cfg.times[0]?.tz || DEFAULT_TZ;
   const hhmmList = cfg.times.map(t => cronToHHmm(t.cron)).filter(Boolean);
   const advList  = cfg.times.map(t => (cronToHHmm(t.cron) ? null : t.cron)).filter(Boolean);
 
   const data = {
     general: {
+      server_name: serverName,
       timezone: tz,
       text_enabled: !!cfg.textEnabled,
       audio_file: cfg.audioFile || 'chime.wav',
@@ -461,6 +464,7 @@ client.on('interactionCreate', async (interaction) => {
         // 4) iniへIDを書き戻し（人が見ても分かるように）
         const parsed = ini.parse(fs.readFileSync(p, 'utf-8'));
         const g = parsed.general || (parsed.general = {});
+        g.server_name = guildName || g.server_name || '';
         g.text_channel_id = cfg.textChannelId || '';
         g.voice_channel_id = cfg.voiceChannelId || '';
         fs.writeFileSync(p, ini.stringify(parsed), 'utf-8');
@@ -708,6 +712,8 @@ client.on('interactionCreate', async (interaction) => {
             const gn = dst.general || {};
             const sn = srcParsed.general || {};
             dst.general = Object.assign({}, gn, sn);
+            // コピー先のサーバー名に合わせる
+            dst.general.server_name = client.guilds.cache.get(tid)?.name || dst.general.server_name || '';
             if (gn.text_channel_id) dst.general.text_channel_id = gn.text_channel_id;
             if (gn.voice_channel_id) dst.general.voice_channel_id = gn.voice_channel_id;
             // time.* は全面置換（見通しのため）
