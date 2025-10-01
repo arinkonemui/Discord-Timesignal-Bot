@@ -281,20 +281,9 @@ async function playOnce(guildId, audioOverride = null) {
     throw new Error('Bot がサーバーミュートです。ミュート解除してください。');
   }
 
-  let connection = getVoiceConnection(guildId);
-  if (!connection) {
-    const joinOptions = {
-      channelId: voiceChannel.id,
-      guildId,
-      adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-      selfDeaf: true,
-    };
-    if (process.env.DAVE_DISABLE === '1') joinOptions.daveEncryption = false;
-    console.log('[voice] joinVoiceChannel with', { daveEncryption: !(process.env.DAVE_DISABLE === '1') });
-    connection = joinVoiceChannel(joinOptions);
-  } else {
-    console.log('[voice] reuse existing connection');
-  }
+  // 既存接続のみ使用（自動接続しない）
+  const connection = getVoiceConnection(guildId);
+  if (!connection) throw new Error('Botがボイスチャンネルに未接続です。/join を実行して接続した状態でお試しください。');
 
   // ❶ 接続が Ready になるのを待つ（サーバー差で必須）
   try {
@@ -356,11 +345,14 @@ function rebuildJobsForGuild(guildId) {
     const job = cron.schedule(cronExp, async () => {
       try {
         const now = new Date();
-        await postTextIfEnabled(guildId, renderMessageWith(msgTpl, tz, now));
-        if (!ensureGuildConfig(guildId).voiceChannelId) {
-          console.warn(`[${guildId}] voiceChannelId is not set. Skipping audio playback.`);
+        // 参加中か確認（未接続なら完全スキップ）
+        const conn = getVoiceConnection(guildId);
+        if (!conn) {
+          console.log(`[${guildId}] skipped: not joined (no active voice connection)`);
           return;
         }
+        // 接続中のみテキスト+音声
+        await postTextIfEnabled(guildId, renderMessageWith(msgTpl, tz, now));
         await playOnce(guildId, audio);
       } catch (e) {
         console.error(`[${guildId}] Scheduled run error:`, e);
@@ -640,6 +632,9 @@ client.on('interactionCreate', async (interaction) => {
       case 'test': {
         await interaction.reply({ content: '🔧 テストを実行します…' });
         try {
+          if (!getVoiceConnection(guildId)) {
+            throw new Error('Botがボイスチャンネルに未接続です。/join で接続してから実行してください。');
+          }
           const preview = renderMessage(cfg, new Date());
           await postTextIfEnabled(guildId, '🔧 テスト: ' + preview);
           await playOnce(guildId, cfg.audioFile);
@@ -657,14 +652,22 @@ client.on('interactionCreate', async (interaction) => {
           return interaction.reply({ content: '番号が不正です。/list で確認してください。', ephemeral: true });
         }
         await interaction.reply({ content: `🧪 #${index} の設定でテスト中…` });
-        const entry = cfg.times[index - 1];
-        const tz = entry.tz || DEFAULT_TZ;
-        const tpl = entry.messageTemplate || cfg.messageTemplate;
-        const audio = entry.audioFile || cfg.audioFile;
-        const preview = renderMessageWith(tpl, tz, new Date());
-        await postTextIfEnabled(guildId, '🧪 テスト: ' + preview);
-        await playOnce(guildId, audio);
-        await interaction.editReply(`✅ #${index} の設定でテスト完了（${cronToHHmm(entry.cron) || entry.cron} / ${tz}）`);
+        try{
+          if (!getVoiceConnection(guildId)) {
+            throw new Error('Botがボイスチャンネルに未接続です。/join で接続してから実行してください。');
+          }
+          const entry = cfg.times[index - 1];
+          const tz = entry.tz || DEFAULT_TZ;
+          const tpl = entry.messageTemplate || cfg.messageTemplate;
+          const audio = entry.audioFile || cfg.audioFile;
+          const preview = renderMessageWith(tpl, tz, new Date());
+          await postTextIfEnabled(guildId, '🧪 テスト: ' + preview);
+          await playOnce(guildId, audio);
+          await interaction.editReply(`✅ #${index} の設定でテスト完了（${cronToHHmm(entry.cron) || entry.cron} / ${tz}）`);
+        } catch(e) {
+          console.error('[test-time] failed:', e);
+          await interaction.editReply('❌ テストに失敗しました。\n```\n' + (e?.message || e) + '\n```');
+        }
         break;
       }
 
@@ -826,6 +829,7 @@ client.on('interactionCreate', async (interaction) => {
           '',
           '【テスト】',
           '`/test`（既定） / `/test-time index:<N>`（個別）',
+          '※ 時報は Bot が /join でボイスチャンネルに接続中のときだけ実行されます（未接続ならスキップ）。',
           '',
           '【ファイル】',
           '`/sync-settings` — このギルドの ini（configs/<guildId>.ini）を反映',
