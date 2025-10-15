@@ -24,8 +24,8 @@ if (ffmpeg) process.env.FFMPEG_PATH = ffmpeg;
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const DEFAULT_TZ = process.env.TZ || 'Asia/Tokyo';
-if (!TOKEN || !CLIENT_ID) {
-  console.error('❌ .env の DISCORD_TOKEN / CLIENT_ID を設定してください。');
+if (!TOKEN) {
+  console.error('❌ .env の DISCORD_TOKEN を設定してください。');
   process.exit(1);
 }
 
@@ -367,8 +367,17 @@ function rebuildJobsForGuild(guildId) {
 async function registerGuildCommands(guildId) {
   const commands = require('./commands.js');
   const rest = new REST({ version: '10' }).setToken(TOKEN);
-  console.log(`🛠 Registering GUILD ${guildId}:`, commands.map(c => c.name).join(', '));
-  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guildId), { body: commands });
+  // console.log(`🛠 Registering GUILD ${guildId}:`, commands.map(c => c.name).join(', '));
+  // await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guildId), { body: commands });
+  // console.log(`⚡ Registered GUILD commands for ${guildId}`);
+  // CLIENT_ID が未設定なら、ログイン後に取得できるアプリID/ユーザーIDを使う
+  const appId = CLIENT_ID || client.application?.id || client.user?.id;
+  if (!appId) {
+    console.warn(`[commands] CLIENT_ID not found (guild: ${guildId}). Skip registering slash commands for now.`);
+    return;
+  }
+  console.log(`🛠 Registering GUILD ${guildId} (appId=${appId}):`, commands.map(c => c.name).join(', '));
+  await rest.put(Routes.applicationGuildCommands(appId, guildId), { body: commands });
   console.log(`⚡ Registered GUILD commands for ${guildId}`);
 }
 
