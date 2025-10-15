@@ -1,35 +1,54 @@
 @echo on
 setlocal
-rem ※ 文字化け防止用。不要ならこの行は消してOK
 chcp 65001 >nul
 
-rem この .bat がある setup フォルダから 1つ上（プロジェクトルート）へ
+rem Go to project root (this .bat is under setup\)
 cd /d "%~dp0\.."
 
 echo ==== Current Dir: %CD% ====
 
-rem 必須ファイルチェック
 if not exist "package.json" (
-  echo [ERROR] package.json not found. Place this bat under setup\ and keep project files one level up.
+  echo [ERROR] package.json not found. Place this file under setup\ and keep project files one level up.
   pause & exit /b 1
 )
-
 if not exist ".env" (
   echo [ERROR] .env not found. Place .env here: %CD%
   pause & exit /b 1
 )
 
-rem Node/NPM 存在チェック
-where npm >nul 2>&1
-if errorlevel 1 (
-  echo [ERROR] npm not found. Please install Node.js or fix PATH.
-  pause & exit /b 1
+where node >nul 2>&1 || (echo [ERROR] node not found. Install Node.js and re-run.& pause & exit /b 1)
+where npm  >nul 2>&1 || (echo [ERROR] npm not found.  Install Node.js and re-run.& pause & exit /b 1)
+
+if not exist "node_modules" (
+  if exist "package-lock.json" (
+    echo ==== npm ci --omit=dev ====
+    call npm ci --omit=dev || (echo [ERROR] npm ci failed.& pause & exit /b 1)
+  ) else (
+    echo ==== npm install --omit=dev ====
+    call npm install --omit=dev || (echo [ERROR] npm install failed.& pause & exit /b 1)
+  )
 )
 
-rem 依存（初回だけ / 必要に応じて有効化）
-rem call npm ci  || call npm install
+node -e "require.resolve('ini')" 1>nul 2>nul
+if errorlevel 1 (
+  echo ==== Installing 'ini' ====
+  call npm i ini || (echo [WARN] failed to install 'ini'. Continuing...)
+)
 
 echo ==== Run: npm start ====
 call npm run start --loglevel=info
-echo ==== ExitCode: %errorlevel% ====
+set "APP_EXIT=%errorlevel%"
+
+if not "%APP_EXIT%"=="0" (
+  echo ==== npm start failed (code %APP_EXIT%). Trying direct Node fallback... ====
+  if exist "index.js" (
+    node --env-file=.env index.js
+    set "APP_EXIT=%errorlevel%"
+  ) else (
+    echo [ERROR] No index.js to run directly. Please define "scripts.start" or provide index.js.
+  )
+)
+
+echo ==== ExitCode: %APP_EXIT% ====
 pause
+exit /b %APP_EXIT%
