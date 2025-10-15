@@ -32,6 +32,8 @@ discord-time-signal/audio/**
 
 #DISCORD時報BOTフォルダの一部を無視
 資料/**
+release/**
+scripts/**
 
 #configフォルダのファイルを無視
 discord-time-signal/configs/**

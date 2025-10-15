@@ -1,0 +1,55 @@
+【Discord Time Signal Bot セットアップ手順】
+
+■ 0. 前提
+- Node.js 18 以上がインストールされていること（https://nodejs.org/）
+- Discord の Bot トークン（必須）と Client ID(任意） を用意
+
+■ 1. セットアップを実行する
+Windows:
+  1) 「Run Setup (Windows).bat」をダブルクリック
+  2) 依存パッケージの導入と .env 作成、必要フォルダ作成が行われます
+
+mac:
+  1) 「Run Setup (mac).command」をダブルクリック
+     ※「開発元を確認できません」と出たら、右クリック→開く で実行
+     ※ 初回のみ実行権限が必要な場合があります：
+        ターミナルで  chmod +x "setup/Run Setup (mac).command" "setup/Start Bot (mac).command" scripts/setup.sh
+
+■ 2. 必須設定（.env を編集）
+setup を実行すると、プロジェクト直下に .env が作成されます。
+テキストエディタで開き、次の2項目を設定してください。
+
+DISCORD_TOKEN=（Botトークンを貼り付け）
+CLIENT_ID=（アプリの Client ID、未設定でも動作可）
+
+※ その他の項目（TZ, DAVE_DISABLE, VOICE_READY_TIMEOUT_MS）は既定のままでOKです。
+
+■ 3. 起動方法
+Windows:
+  - 「Start Bot (Windows).bat」をダブルクリック
+
+mac:
+  - 「Start Bot (mac).command」をダブルクリック
+
+起動に成功すると、コンソールに「Logged in as ...」が表示されます。
+
+■ 4. 初期動作確認（Discord 側）
+1) Bot をサーバーに招待
+2) 自分が通常のボイスチャンネルに入る（Stage ではなく）
+3) 通知先にしたいテキストチャンネルでコマンド実行
+   - /join  …… このチャンネル/ボイスを登録（返信は実行者にのみ表示）
+   - /add-time time:09:00 …… 試しに 09:00 を登録
+   - /test …… その場でテキスト＋音声のテスト（Bot が VC に接続中のときのみ）
+
+■ 5. 実行コマンドの基本（補足・困ったとき）
+- すべてのコマンドは Discord 上でスラッシュから入力します（例：/join, /test）
+- 代表的なコマンド
+  ・/join …… いま入っているボイス/テキストを登録し、時報は「接続中のときだけ」動作
+  ・/add-time time:HH:MM …… 時刻を追加
+  ・/list …… 登録内容を確認
+  ・/test …… その場でテスト再生（接続中のみ）
+  ・/leave …… 一時停止（VC未接続扱い）
+  ・/sync-settings …… configs/内の .ini を読み直し
+- スリープ復帰後に鳴らない場合は、そのサーバーで /join を一度実行してください。
+
+以上
