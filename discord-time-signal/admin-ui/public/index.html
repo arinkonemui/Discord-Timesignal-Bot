@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>時報Bot 管理UI（v0.2）</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">時報ボット設定画面</div>
+    <div class="actions">
+      <button class="btn ghost" id="btn-copy">コピー</button>
+      <button class="btn" id="btn-start">起動</button>
+      <button class="btn danger" id="btn-stop">停止</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="block">
+        <div class="block-title">サーバー</div>
+        <ul id="guild-list" class="list"></ul>
+      </div>
+
+      <div class="block">
+        <div class="block-title">音声ファイル</div>
+        <ul id="audio-list" class="list small"></ul>
+        <div class="row gap">
+          <button class="btn ghost" id="btn-audio-rescan">再スキャン</button>
+          <button class="btn ghost" id="btn-open-audio">フォルダ</button>
+        </div>
+      </div>
+    </aside>
+
+    <section class="content">
+      <div id="empty" class="empty">左のサーバーを選択してください。</div>
+
+      <div id="editor" class="editor hidden">
+        <div class="grid two">
+          <div class="field">
+            <label>選択中サーバー名</label>
+            <div id="current-guild" class="mono"></div>
+          </div>
+          <div class="field">
+            <label>タイムゾーン</label>
+            <select id="timezone"></select>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="grid two">
+            <div class="field">
+              <label>時報メッセージテキスト表示</label>
+              <button id="toggle-text-enabled" class="switch"></button>
+            </div>
+            <div class="field">
+              <label>ON/OFF</label>
+              <button id="toggle-voice-enabled" class="switch"></button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">timeN（時報スロット）</div>
+          <table class="table" id="times-table">
+            <thead>
+              <tr>
+                <th style="width:90px;">timeN</th>
+                <th style="width:100px;">ON/OFF</th>
+                <th style="width:140px;">設定時間<br><small>(HH:mm)</small></th>
+                <th style="min-width:180px;">設定音声ファイル名</th>
+                <th>設定テキストメッセージ</th>
+                <th style="width:180px;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="times-body"></tbody>
+          </table>
+          <div class="row">
+            <button id="btn-add-time" class="btn">＋ 追加</button>
+          </div>
+        </div>
+
+        <div class="row end gap">
+          <button class="btn ghost" id="btn-preview">プレビュー</button>
+          <button class="btn primary" id="btn-save" disabled>保存（未実装）</button>
+          <button class="btn ghost" id="btn-reload">設定再読込（未実装）</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <div id="status">Ready</div>
+  </footer>
+
+  <script src="/main.js" type="module"></script>
+</body>
+</html>

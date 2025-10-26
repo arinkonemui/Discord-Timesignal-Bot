@@ -1,0 +1,14 @@
+{
+  "name": "time-signal-admin-ui",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ini": "^4.1.3"
+  }
+}
