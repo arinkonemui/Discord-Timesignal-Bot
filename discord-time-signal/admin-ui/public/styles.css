@@ -25,5 +25,7 @@ body{ margin:0; background:var(--bg); color:var(--text);
 .row{ display:flex; align-items:center; gap:8px; margin-top:8px;} .row.end{ justify-content:flex-end; } .row.gap{ gap:8px; }
 .btn{ background:#1a2c55; color:var(--text); border:1px solid var(--border); padding:8px 12px; border-radius:8px; cursor:pointer;}
 .btn:hover{ filter:brightness(1.1);} .btn.danger{ background:#3a1212; border-color:#5e1d1d;} .btn.primary{ background:#1e3a8a; border-color:#274690;} .btn.ghost{ background:transparent; border-color:var(--border); } .btn.small{ padding:4px 8px; font-size:12px;}
-.switch{ background:#0b1a38; border:1px solid var(--border); border-radius:999px; padding:6px 14px; cursor:pointer;} .switch.on{ background:#133115; border-color:#234b27;} .switch.off{ background:#2e0f0f; border-color:#4d1e1e;}
+.switch{ background:#0b1a38; border:1px solid var(--border); border-radius:999px; padding:6px 14px; cursor:pointer;} 
+.switch.on{ background:#133115; border-color:#234b27;} 
+.switch.off{ background:#2e0f0f; border-color:#4d1e1e;}
 .op-row{ display:flex; gap:6px; justify-content:flex-end; } .op-row .btn.small{ min-width:38px; }

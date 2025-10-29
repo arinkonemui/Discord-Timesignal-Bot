@@ -56,6 +56,11 @@ function renderEditor(){
     tzEl.appendChild(opt);
   });
   tzEl.onchange = (e)=> state.model.general.timezone = e.target.value;
+  // ▼ 上部トグルの初期化＆イベント
+  const textBtn  = document.getElementById('toggle-text-enabled');
+  const voiceBtn = document.getElementById('toggle-voice-enabled');
+  syncSwitch(textBtn,  !!state.model.general.text_enabled,  (v)=> state.model.general.text_enabled  = v);
+  syncSwitch(voiceBtn, !!state.model.general.voice_enabled, (v)=> state.model.general.voice_enabled = v);
 
   drawTimes();
 }
