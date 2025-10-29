@@ -131,6 +131,8 @@ function exportGuildIni(guildId) {
     if (t.tz) sec.tz = t.tz;
     if (t.audioFile) sec.audio = t.audioFile;
     if (t.messageTemplate) sec.message = t.messageTemplate;
+    // 未指定=ON。false のときだけ明示 false、true のときも書いておくとわかりやすい
+    sec.enabled = (t.enabled === false ? 'false' : 'true');
     data[`time.${idx + 1}`] = sec;
   });
 
@@ -168,6 +170,12 @@ function applyGuildIni(guildId) {
       const t = { cron: cronExp, tz: sec.tz || tzDefault };
       if (sec.audio)   t.audioFile = String(sec.audio);
       if (sec.message) t.messageTemplate = String(sec.message);
+      // enabled: 未指定=ON
+      if (typeof sec.enabled !== 'undefined') {
+        t.enabled = !(String(sec.enabled).toLowerCase() === 'false');
+      } else {
+        t.enabled = true;
+      }
       times.push(t);
     }
   } else {
@@ -199,6 +207,7 @@ function replySettingsEmbed(cfg, guildName = '') {
     ? cfg.times.map((t, i) => {
         const hhmm = cronToHHmm(t.cron);
         const base = hhmm ? hhmm : `\`${t.cron}\``;
+        const state = (t.enabled === false ? 'OFF' : 'ON ');
         const parts = [];
         if (t.audioFile) parts.push(`audio: \`${t.audioFile}\``);
         if (t.messageTemplate) {
@@ -206,7 +215,7 @@ function replySettingsEmbed(cfg, guildName = '') {
           parts.push(`msg: "${s.slice(0,30)}${s.length>30?'…':''}"`);
         }
         const opt = parts.length ? ' | ' + parts.join(' / ') : '';
-        return `${i + 1}. ${base} (${t.tz || DEFAULT_TZ})${opt}`;
+        return `${i + 1}. [${state}] ${base} (${t.tz || DEFAULT_TZ})${opt}`;
       })
     : ['なし'];
 
@@ -337,7 +346,9 @@ function rebuildJobsForGuild(guildId) {
   jobsByGuild.set(guildId, []);
 
   const cfg = ensureGuildConfig(guildId);
-  cfg.times.forEach((entry) => {
+  (cfg.times || [])
+    .filter(entry => entry.enabled !== false) // OFF はジョブを作らない
+    .forEach((entry) => {
     const cronExp = entry.cron;
     const tz = entry.tz || DEFAULT_TZ;
     const msgTpl = entry.messageTemplate || cfg.messageTemplate;
@@ -566,7 +577,7 @@ client.on('interactionCreate', async (interaction) => {
           const full = path.join(AUDIO_DIR, perFile);
           if (!fs.existsSync(full)) return interaction.reply({ content: `audio/${perFile} が見つかりません。`, ephemeral: true });
         }
-        const entry = { cron: cronExp, tz };
+        const entry = { cron: cronExp, tz, enabled: true };
         if (perMsg)  entry.messageTemplate = perMsg;
         if (perFile) entry.audioFile = perFile;
         cfg.times.push(entry);
@@ -589,6 +600,9 @@ client.on('interactionCreate', async (interaction) => {
         const file = interaction.options.getString('file', true);
         if (index < 1 || index > cfg.times.length) {
           return interaction.reply({ content: '番号が不正です。/list で確認してください。', ephemeral: true });
+        }
+        if (cfg.times[index - 1].enabled === false) {
+          return interaction.reply({ content: `#${index} は OFF のため再生しません。/set-time-enabled で ON にしてからお試しください。`, ephemeral: true });
         }
         const full = path.join(AUDIO_DIR, file);
         if (!fs.existsSync(full)) return interaction.reply({ content: `audio/${file} が見つかりません。`, ephemeral: true });
@@ -617,6 +631,21 @@ client.on('interactionCreate', async (interaction) => {
           .addFields({ name: 'Template', value: '```\n' + tpl.slice(0, 500) + '\n```' }, { name: 'Preview', value: preview })
           .setTimestamp(new Date());
         await interaction.reply({ embeds: [embed] });
+        break;
+      }
+
+      case 'set-time-enabled': {
+        const index = interaction.options.getInteger('index', true);
+        const enabled = interaction.options.getBoolean('enabled', true);
+        if (index < 1 || index > cfg.times.length) {
+          return interaction.reply({ content: '番号が不正です。/list で確認してください。', ephemeral: true });
+        }
+        cfg.times[index - 1].enabled = !!enabled;
+        saveStore(store);
+        exportGuildIni(guildId);
+        rebuildJobsForGuild(guildId);
+        const label = enabled ? 'ON' : 'OFF';
+        await interaction.reply({ content: `#${index} を **${label}** にしました。`, embeds: [replySettingsEmbed(cfg, guildName)] });
         break;
       }
 

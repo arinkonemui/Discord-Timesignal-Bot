@@ -66,6 +66,12 @@ module.exports = [
     .addStringOption(opt => opt.setName('template').setDescription('テンプレ（{time},{HH},{mm}）').setRequired(true)),
 
   new SlashCommandBuilder()
+    .setName('set-time-enabled')
+    .setDescription('登録済みの時刻エントリを ON/OFF 切替します')
+    .addIntegerOption(opt => opt.setName('index').setDescription('/list の番号').setRequired(true))
+    .addBooleanOption(opt => opt.setName('enabled').setDescription('true=ON / false=OFF').setRequired(true)),
+
+  new SlashCommandBuilder()
     .setName('remove-time')
     .setDescription('登録済みの時刻を削除します')
     .addIntegerOption(opt => opt.setName('index').setDescription('/list の番号').setRequired(true)),
