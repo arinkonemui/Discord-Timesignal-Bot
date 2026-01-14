@@ -61,6 +61,29 @@
             </div>
           </div>
         </div>
+
+        <!-- ▼ デフォルト時報（timeN の上に配置） -->
+        <div class="card" id="default-block">
+          <div class="card-title">デフォルト時報</div>
+          <!-- 1行目：デフォルト時報 ON/OFF -->
+          <div class="field row">
+            <span class="label">デフォルト時報ON/OFF：</span>
+            <button id="default-enable" class="switch">ON</button>
+          </div>
+          <!-- 2行目：音声ファイル -->
+          <div class="field row wrap">
+            <span class="label">音声ファイル：</span>
+            <span id="default-audio-file" class="mono"></span>
+            <button id="default-audio-toggle" class="btn small" type="button">▶ 再生</button>
+            <audio id="default-audio" preload="none"></audio>
+          </div>
+          <!-- 3行目：時刻（ラベルを .label で統一、本文は div で自然改行） -->
+          <div class="field row wrap">
+            <span class="label">時刻：</span>
+            <div id="default-times" class="times-flow"></div>
+          </div>
+          <div class="hint">※ デフォルト時刻と timeN の時刻が重なった場合は、timeN を優先します。</div>
+        </div>
         
         <div class="card">
           <div class="card-title">timeN（時報スロット）</div>

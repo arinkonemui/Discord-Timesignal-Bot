@@ -14,6 +14,12 @@ const statusEl = $('#status'), guildListEl = $('#guild-list'), audioListEl = $('
 const editorEl = $('#editor'), emptyEl = $('#empty'), currentGuildEl = $('#current-guild');
 const tzEl = $('#timezone');
 const timesTbody = $('#times-body');
+// デフォルト時報ブロック要素
+const defaultAudioEl = $('#default-audio');
+const defaultAudioFileEl = $('#default-audio-file');
+const defaultAudioToggleBtn = $('#default-audio-toggle');
+const defaultTimesEl = $('#default-times');
+const defaultEnableBtn = $('#default-enable');
 // ▼ 変更3で使う要素
 const unsavedEl = $('#unsaved-indicator');
 const btnSave = $('#btn-save');
@@ -51,11 +57,81 @@ function renderAudioList(){
 }
 
 function toModel(data){
-  const m={ id:data.id, name:data.name || data.id,
-    general:{...data.normalized.general}, audio:{...data.normalized.audio},
-    times:data.normalized.times.map(t=>({ index:t.index, enabled:true, time:t.value,
-      audio_file:data.normalized.audio.audio_file||'', message:data.normalized.general.message_template||'' }))};
-  return m;
+  const baseMsg   = data.normalized.general.message_template || '';
+  const baseAudio = data.normalized.audio.audio_file || '';
+  return {
+    id: data.id,
+    name: data.name || data.id,
+    general: { ...data.normalized.general },
+    audio:   { ...data.normalized.audio },
+    times: (data.normalized.times || []).map(t => ({
+      index: t.index,
+      enabled: (t.enabled !== false),           // ← APIのenabledを尊重
+      time: (t.value || ''),                    // ← APIのtimeをそのまま
+      audio_file: (t.audio || baseAudio),       // ← 行オーバーライド or 既定
+      message: (t.message || baseMsg),          // ← 行オーバーライド or 既定
+      tz: t.tz || data.normalized.general.timezone || 'Asia/Tokyo',
+      source: t.source || ''
+    })),
+    // デフォルト時報の独立ON/OFF（未保存のローカル状態）。未指定は true。
+    default_enabled: (data.normalized.general?.default_enabled !== false)
+  };
+}
+
+// HTML（重複時刻は <span class="masked">、改行は「カンマ直後」で自然折返し）
+function formatTimesFlowMasked(csv, maskedSet){
+  if(!csv) return '';
+  const parts = csv.split(',').map(s=>s.trim()).filter(Boolean);
+  // ",<ZWSP> " を挿入してカンマ位置で改行可能にする
+  return parts.map(t => maskedSet.has(t) ? `<span class="masked">${t}</span>` : t)
+              .join(',&#8203; ');
+}
+
+
+// 音声プレビュー制御
+function bindDefaultPreview(audioFile){
+  defaultAudioFileEl.textContent = audioFile || '(未設定)';
+  if(audioFile){
+    defaultAudioEl.src = `/media/audio/${encodeURIComponent(audioFile)}`;
+    defaultAudioToggleBtn.disabled = false;
+  }else{
+    defaultAudioEl.removeAttribute('src');
+    defaultAudioToggleBtn.disabled = true;
+  }
+  defaultAudioToggleBtn.textContent = '▶ 再生';
+  defaultAudioToggleBtn.onclick = ()=>{
+    if(!defaultAudioEl.src) return;
+    if(defaultAudioEl.paused){
+      defaultAudioEl.play().then(()=> defaultAudioToggleBtn.textContent='■ 停止').catch(()=>{});
+    }else{
+      defaultAudioEl.pause(); defaultAudioEl.currentTime=0; defaultAudioToggleBtn.textContent='▶ 再生';
+    }
+  };
+  defaultAudioEl.onended = ()=>{ defaultAudioToggleBtn.textContent='▶ 再生'; };
+}
+
+// 現在の timeN（表示対象のみ）の時刻集合
+function getTimeSlotSet(){
+  const all = (state.model?.times || []);
+  // general_csv は表示対象外のため source フィルタは不要だが念のため
+  return new Set(all.filter(r => r.source !== 'general_csv').map(r => r.time).filter(Boolean));
+}
+
+
+// 2つのスイッチを同期（上部カードとデフォルトブロック）
+function syncSwitchPair(btnA, btnB, initVal, onChange){
+  const setBoth=(v)=>{ setSwitch(btnA,v); setSwitch(btnB,v); };
+  setBoth(!!initVal);
+  btnA.onclick=btnB.onclick=()=>{ const next = !(btnA.classList.contains('on')); setBoth(next); onChange(next); };
+}
+
+// 表示対象（[general].times 由来は除外）
+function getVisibleTimes(){
+  const all = (state.model?.times || []);
+  // source が 'general_csv' の行は表示しない
+  return all.filter(r => r.source !== 'general_csv');
+  // ※ [general] 直下の timeN/time.N も非表示にしたい場合は:
+  // return all.filter(r => !['general_csv','general_time_key'].includes(r.source));
 }
 
 function renderEditor(){
@@ -74,10 +150,50 @@ function renderEditor(){
   // ▼ 上部トグルの初期化＆イベント
   const textBtn  = document.getElementById('toggle-text-enabled');
   const voiceBtn = document.getElementById('toggle-voice-enabled');
-  syncSwitch(textBtn,  !!state.model.general.text_enabled,  (v)=>{ state.model.general.text_enabled  = v; markDirty(); });
-  syncSwitch(voiceBtn, !!state.model.general.voice_enabled, (v)=>{ state.model.general.voice_enabled = v; markDirty(); });
+  // 全体ON/OFF（既存）
+  syncSwitch(textBtn,  !!state.model.general.text_enabled,  (v)=>{ state.model.general.text_enabled  = v; markDirty(); redrawDefaultBlock(); });
+  syncSwitch(voiceBtn, !!state.model.general.voice_enabled, (v)=>{ state.model.general.voice_enabled = v; markDirty(); redrawDefaultBlock(); });
+
+
+  // ▼ デフォルト時報の表記
+  redrawDefaultBlock();
+  // general.audio_file（なければ normalized.audio.audio_file）
+  // → redrawDefaultBlock 内で実施
 
   updateSaveButtonState();
+
+  // ← ここで時報テーブルを描画（ロード直後に反映されるように）
+  drawTimes();
+  // ロード直後は未保存扱いをクリア
+  markDirty(false);
+}
+
+function redrawDefaultBlock(){
+  // デフォルト時報の独立ON/OFF
+  setSwitch(defaultEnableBtn, !!state.model.default_enabled);
+  defaultEnableBtn.onclick = ()=>{
+    const next = !defaultEnableBtn.classList.contains('on');
+    setSwitch(defaultEnableBtn, next);
+    state.model.default_enabled = next;
+    markDirty();
+    // 有効表示の再計算（淡色マスクには影響しないが将来の保存/API想定で呼ぶ）
+    renderDefaultTimes();
+  };
+  renderDefaultTimes();
+  // 音声プレビューは常に動く（プレビュー自体はスケジュール可否に影響しない）
+  const generalAudio = state.model.general.audio_file || state.model.audio.audio_file || '';
+  bindDefaultPreview(generalAudio);
+}
+
+function renderDefaultTimes(){
+  const csv = state.model.general.times || '';
+  const masked = getTimeSlotSet();   // timeN と重複する時刻をマスク
+  // 内部の有効判定（参考：default_enabled と全体スイッチ）
+  const effText  = !!state.model.default_enabled && !!state.model.general.text_enabled;
+  const effVoice = !!state.model.default_enabled && !!state.model.general.voice_enabled;
+  // 将来API保存時にこの値を渡して実行可否に反映予定。表示は淡色マスクのみ。
+  defaultTimesEl.innerHTML = csv ? formatTimesFlowMasked(csv, masked) : '(未設定)';
+  // 参考：効果的に完全OFFならヒントを追加で出すことも可能（UI要件次第）
 }
 
 // スイッチUI共通
@@ -110,7 +226,8 @@ function updateSaveButtonState(){
 // 時報テーブル描画（↑↓－ 動作あり）
 function drawTimes(){
   timesTbody.innerHTML='';
-  state.model.times.forEach((row,i)=>{
+  const rows = getVisibleTimes();
+  rows.forEach((row,i)=>{
     const tr=document.createElement('tr');
 
     // timeN 表示
@@ -169,7 +286,8 @@ function addEmptyRow() {
     enabled: true,
     time: '12:00',
     audio_file: state.audioFiles[0] || '',
-    message: state.model.general.message_template || ''
+    message: state.model.general.message_template || '',
+    source: 'time_section' // 追加行の出所を明示化
   });
   drawTimes(); markDirty(); updateSaveButtonState();
 }

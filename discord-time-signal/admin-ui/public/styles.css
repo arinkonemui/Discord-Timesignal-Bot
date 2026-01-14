@@ -23,6 +23,7 @@ body{ margin:0; background:var(--bg); color:var(--text);
 .table{ width:100%; border-collapse:collapse;} .table th,.table td{ border-bottom:1px dashed var(--border); padding:8px; vertical-align:middle;}
 .table input[type="time"], .table select, .table input[type="text"] { width:100%; }
 .row{ display:flex; align-items:center; gap:8px; margin-top:8px;} .row.end{ justify-content:flex-end; } .row.gap{ gap:8px; }
+.row.wrap{ flex-wrap: wrap; }
 .btn{ background:#1a2c55; color:var(--text); border:1px solid var(--border); padding:8px 12px; border-radius:8px; cursor:pointer;}
 .btn:hover{ filter:brightness(1.1);} .btn.danger{ background:#3a1212; border-color:#5e1d1d;} .btn.primary{ background:#1e3a8a; border-color:#274690;} .btn.ghost{ background:transparent; border-color:var(--border); } .btn.small{ padding:4px 8px; font-size:12px;}
 .btn[disabled]{ opacity:.5; cursor:not-allowed; pointer-events:none; filter:none; }
@@ -40,3 +41,15 @@ body{ margin:0; background:var(--bg); color:var(--text);
 .switch.on{ background:#133115; border-color:#234b27;} 
 .switch.off{ background:#2e0f0f; border-color:#4d1e1e;}
 .op-row{ display:flex; gap:6px; justify-content:flex-end; } .op-row .btn.small{ min-width:38px; }
+/* デフォルト時報の表示用 */
+.wrap-lines{ white-space:pre-wrap; line-height:1.6; }
+.label{ color:var(--muted); min-width:6em; display:inline-block; }
+.hint{ color:var(--muted); font-size:12px; margin-top:8px; }
+/* デフォルト時刻のうち、timeN と重複して優先されないものを淡色表示 */
+.masked{ opacity: .45; text-decoration: line-through; }
+/* デフォルト時刻の本文：端まで流しつつ、JS側の挿入するゼロ幅スペースで時刻単位改行 */
+.times-flow{
+  white-space: normal;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
