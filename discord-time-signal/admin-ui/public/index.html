@@ -49,14 +49,15 @@
         </div>
         
         <!-- ▼ テキスト表示 / ボイス ON/OFF -->
-        <div class="card">
+        <div class="card" id="common-settings">
+          <div class="card-title">共通設定</div>
           <div class="grid two">
             <div class="field">
-              <label>時報メッセージテキスト表示</label>
+              <span class="label">時報メッセージテキスト表示 ： </span>
               <button id="toggle-text-enabled" class="switch">ON</button>
             </div>
             <div class="field">
-              <label>ボイス再生 ON/OFF</label>
+              <span class="label">ボイス再生 ： </span>
               <button id="toggle-voice-enabled" class="switch">ON</button>
             </div>
           </div>
@@ -84,9 +85,9 @@
           </div>
           <div class="hint">※ デフォルト時刻と timeN の時刻が重なった場合は、timeN を優先します。</div>
         </div>
-        
+
         <div class="card">
-          <div class="card-title">timeN（時報スロット）</div>
+          <div class="card-title">個別設定（時報スロット）</div>
           <table class="table" id="times-table">
             <thead>
               <tr>

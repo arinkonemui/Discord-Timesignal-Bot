@@ -17,6 +17,28 @@ body{ margin:0; background:var(--bg); color:var(--text);
 .list li:hover{ border-color:#2a3b66; background:#0c1630;} .list li.active{ outline:1px solid #355299; background:#0b1a38; } .list.small li{ font-size:12px; }
 .content{ flex:1; padding:16px; } .empty{ color:var(--muted); padding:20px; } .hidden{ display:none; }
 .grid.two{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+/* 共通設定：2つのスイッチ間の距離を詰める（現状gapの30%程度） */
+#common-settings .grid.two{
+  /* 1fr 1fr だと列が画面幅いっぱいに広がるので「距離」が詰まらない。
+     共通設定だけ内容幅で並べて左寄せにする。 */
+  grid-template-columns: max-content max-content;
+  justify-content: start;
+  column-gap: 12px; /* ←ここを好みで微調整 */
+}
+
+#common-settings .grid.two .field{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
+/* 個別設定（時報スロット）テーブル：ヘッダと行の位置ズレを揃える */
+#times-table th:nth-child(1),
+#times-table td:nth-child(1),
+#times-table th:nth-child(2),
+#times-table td:nth-child(2){text-align: center;}
+#times-table th:last-child{text-align: center;}
+#times-table td:last-child .op-row{justify-content: center;}
 .field label{ display:block; font-size:12px; color:var(--muted); margin-bottom:6px; }
 .field .mono{ font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:#101a32; padding:8px 10px; border:1px solid var(--border); border-radius:8px; }
 .card{ border:1px solid var(--border); border-radius:12px; padding:12px; background:#0b142b; margin:16px 0; } .card-title{ font-weight:600; margin-bottom:8px; }
