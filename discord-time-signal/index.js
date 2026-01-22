@@ -291,18 +291,37 @@ async function playOnce(guildId, audioOverride = null) {
   }
 
   // 既存接続のみ使用（自動接続しない）
-  const connection = getVoiceConnection(guildId);
+  let connection = getVoiceConnection(guildId);
   if (!connection) throw new Error('Botがボイスチャンネルに未接続です。/join を実行して接続した状態でお試しください。');
 
   // ❶ 接続が Ready になるのを待つ（サーバー差で必須）
-  try {
-    await entersState(connection, VoiceConnectionStatus.Ready, 5_000);
-    console.log('[voice] connection is Ready');
-  } catch (e) {
-    console.error('[voice] connection not ready:', e?.message || e);
-    throw new Error('ボイス接続が安定しませんでした（5秒以内にReadyになりません）。VCや権限を確認してください。');
-  }
+  let retried = false;
+  while (true) {
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
+      console.log('[voice] connection is Ready');
+      break;
+    } catch (e) {
+      console.error('[voice] connection not ready:', e?.message || e);
+      if (retried) {
+        throw new Error('ボイス接続が安定しませんでした（5秒以内にReadyになりません）。VCや権限を確認してください。');
+      }
+      retried = true;
 
+      // 1回だけ：接続を作り直して再トライ（Botのログアウト/ログインはしない）
+      try { connection.destroy(); } catch {}
+
+      const joinOptions = {
+        channelId: voiceChannel.id,
+        guildId,
+        adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+        selfDeaf: true
+      };
+      if (process.env.DAVE_DISABLE === '1') joinOptions.daveEncryption = false;
+      connection = joinVoiceChannel(joinOptions);
+      console.log('[voice] retry joinVoiceChannel once...');
+    }
+  }
 
   const fileName = audioOverride || cfg.audioFile;
   const filePath = path.join(AUDIO_DIR, fileName);
@@ -339,6 +358,15 @@ async function postTextIfEnabled(guildId, messageText) {
   await ch.send(messageText);
 }
 
+// 音声接続が不安定だった場合の通知（textEnabledは見ない：エラー通知のため）
+async function postVoiceErrorToTextChannel(guildId) {
+  const cfg = ensureGuildConfig(guildId);
+  if (!cfg.textChannelId) return;
+  const ch = await client.channels.fetch(cfg.textChannelId).catch(() => null);
+  if (!ch) return;
+  await ch.send('ERROR:ボイス接続が安定しませんでした。VCや権限を確認してください。');
+}
+
 // ジョブ
 function rebuildJobsForGuild(guildId) {
   const current = jobsByGuild.get(guildId) || [];
@@ -367,6 +395,11 @@ function rebuildJobsForGuild(guildId) {
         await playOnce(guildId, audio);
       } catch (e) {
         console.error(`[${guildId}] Scheduled run error:`, e);
+        const msg = String(e?.message || e);
+        // playOnce の Ready 待ち失敗（リトライ後に失敗した場合も同じ文言）
+        if (msg.includes('ボイス接続が安定しませんでした')) {
+          await postVoiceErrorToTextChannel(guildId);
+        }
       }
     }, { timezone: tz });
     job.start();
